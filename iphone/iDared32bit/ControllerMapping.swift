@@ -364,7 +364,7 @@ private final class MappingViewController: UIViewController {
     let canvas = MappingCanvas()
     let open = UIButton(type: .system)
     let panel = UIView()
-    let title = UILabel()
+    let titleLabel = UILabel()
     let connection = UILabel()
     let hint = UILabel()
     let selectedLabel = UILabel()
@@ -409,12 +409,12 @@ private final class MappingViewController: UIViewController {
         panel.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.96)
         panel.layer.cornerRadius = 16
         view.addSubview(panel)
-        for label in [title, connection, hint, selectedLabel, radiusLabel, deadzoneLabel, cursorLabel, cursorSpeedLabel] {
+        for label in [titleLabel, connection, hint, selectedLabel, radiusLabel, deadzoneLabel, cursorLabel, cursorSpeedLabel] {
             label.font = .systemFont(ofSize: 12)
             label.textColor = .label
             panel.addSubview(label)
         }
-        title.font = .boldSystemFont(ofSize: 14)
+        titleLabel.font = .boldSystemFont(ofSize: 14)
         hint.numberOfLines = 2
         hint.font = .systemFont(ofSize: 11)
         panel.addSubview(enabled)
@@ -483,7 +483,7 @@ private final class MappingViewController: UIViewController {
         panel.frame = CGRect(x: (view.bounds.width - width) / 2,
                              y: view.bounds.height - safe.bottom - height - 4,
                              width: width, height: height)
-        title.frame = CGRect(x: 10, y: 7, width: width - 75, height: 20)
+        titleLabel.frame = CGRect(x: 10, y: 7, width: width - 75, height: 20)
         enabled.frame = CGRect(x: width - 62, y: 5, width: 51, height: 31)
         connection.frame = CGRect(x: 10, y: 28, width: width - 80, height: 16)
         scroll.frame = CGRect(x: 8, y: 47, width: width - 16, height: 33)
@@ -524,7 +524,7 @@ private final class MappingViewController: UIViewController {
         canvas.isUserInteractionEnabled = session.editing
         panel.isHidden = !session.editing || controlsCollapsed
         open.setTitle(session.editing ? (controlsCollapsed ? "展开" : "收起") : "手柄", for: .normal)
-        title.text = "\(session.gameName) · \(session.landscape ? "横屏" : "竖屏")映射"
+        titleLabel.text = "\(session.gameName) · \(session.landscape ? "横屏" : "竖屏")映射"
         enabled.isOn = session.profile.enabled
         let binding = session.profile.bindings.first { $0.control == session.selected }
         selectedLabel.text = "\(controlNames[session.selected])：\(binding?.cursorClick == true ? "点击当前游标" : (binding == nil ? "点画面添加" : "拖动标记调整"))"
