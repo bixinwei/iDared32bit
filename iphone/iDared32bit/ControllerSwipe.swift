@@ -3,8 +3,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
-// Independently implemented camera strokes. Design references and comparison:
-// Analysis/controller-mapping/build11-视角映射研究.md (PlayTools / OpenMapper).
+// Independently implemented camera strokes. Design references (no code copied):
+// github.com/PlayCover/PlayTools: SwipeAction and ThumbstickCursorControl.
+// github.com/kinou-p/android-open-mapper: CameraProcessor.
 // A begin occupies its own guest delivery; edge resets include a real lift.
 struct ControllerSwipeContact {
     var point: SIMD2<Float>
