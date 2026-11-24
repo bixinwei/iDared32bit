@@ -25,6 +25,23 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+      - name: Select Xcode 26 or newer
+        run: |
+          python3 - <<'PY'
+          import glob, plistlib, re, subprocess
+          candidates = []
+          for app in glob.glob('/Applications/Xcode*.app'):
+              with open(app + '/Contents/Info.plist', 'rb') as f:
+                  version = plistlib.load(f)['CFBundleShortVersionString']
+              numbers = tuple(int(n) for n in re.findall(r'\d+', version))
+              if numbers[0] >= 26:
+                  candidates.append((numbers, app))
+          if not candidates:
+              raise SystemExit('This runner needs Xcode 26+ for glassEffect and ButtonRole.confirm')
+          app = max(candidates)[1]
+          print('Selecting', app, flush=True)
+          subprocess.run(['sudo', 'xcode-select', '--switch', app + '/Contents/Developer'], check=True)
+          PY
       - name: Install Rust iOS target
         run: |
           rustup toolchain install stable --profile minimal
