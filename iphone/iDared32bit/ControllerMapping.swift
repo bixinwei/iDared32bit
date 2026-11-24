@@ -241,6 +241,7 @@ private final class MappingSession {
             overlay.frame = source.frame
             overlay.windowLevel = UIWindow.Level(rawValue: source.windowLevel.rawValue + 0.5)
             overlay.backgroundColor = .clear
+            overlay.isOpaque = false
             let vc = MappingViewController(session: self, gameController: root)
             overlay.rootViewController = vc
             overlay.session = self
@@ -435,6 +436,7 @@ private final class MappingViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
+        view.isOpaque = false
         canvas.session = session
         view.addSubview(canvas)
         configure(open, "手柄", action: #selector(edit))
