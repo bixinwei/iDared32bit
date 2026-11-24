@@ -1,0 +1,73 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install Rust iOS target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-ios
+          xcodebuild -version
+          cmake --version
+      - name: Build device app without signing
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project iphone/iDared32bit.xcodeproj \
+            -scheme 'iDared 32bit' \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' \
+            PRODUCT_BUNDLE_IDENTIFIER=com.bixinwei.idared32bit \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO \
+            2>&1 | tee build.log
+      - name: Package and verify IPA
+        run: |
+          set -euo pipefail
+          app='build/DerivedData/Build/Products/Release-iphoneos/iDared 32bit.app'
+          test -d "$app"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
+          test -s "$app/$executable"
+          lipo -verify_arch arm64 "$app/$executable"
+          mkdir -p build/package/Payload
+          cp -a "$app" build/package/Payload/
+          cd build/package
+          zip -qry ../iDared32bit-unsigned.ipa Payload
+          unzip -t ../iDared32bit-unsigned.ipa
+          shasum -a 256 ../iDared32bit-unsigned.ipa > ../iDared32bit-unsigned.ipa.sha256
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: iDared32bit-unsigned-IPA
+          path: |
+            build/iDared32bit-unsigned.ipa
+            build/iDared32bit-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 7
