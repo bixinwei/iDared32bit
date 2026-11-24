@@ -22,6 +22,7 @@ private struct ScreenSwipe: Codable {
     var speed: Float = 0.9
     var invertY = false
     var cursorWithL1 = true
+    var precise: Bool?
 }
 
 private struct ScreenCursor: Codable {
@@ -37,7 +38,7 @@ private struct ScreenProfile: Codable {
 }
 
 private struct ScreenConfiguration: Codable {
-    var version = 1
+    var version = 2
     var portrait = ScreenProfile()
     var landscape = ScreenProfile()
 }
@@ -178,15 +179,20 @@ private final class MappingSession {
         file = folder.appendingPathComponent(filename + ".json")
         if let data = try? Data(contentsOf: file),
            var loaded = try? JSONDecoder().decode(ScreenConfiguration.self, from: data),
-           loaded.version == 1 {
+           (1...2).contains(loaded.version) {
             loaded.portrait = Self.validated(loaded.portrait)
             loaded.landscape = Self.validated(loaded.landscape)
+            if loaded.version == 1 {
+                loaded.portrait = Self.upgradedCamera(loaded.portrait)
+                loaded.landscape = Self.upgradedCamera(loaded.landscape)
+                loaded.version = 2
+            }
             configuration = loaded
         } else {
             configuration = ScreenConfiguration()
             if gameID.lowercased().hasPrefix("com.ea.deadspace") {
                 // Starting layout, not a claim about every level's controls.
-                // The cursor is what makes arbitrary contextual targets usable.
+                // LB temporarily selects the cursor for contextual targets.
                 configuration.landscape = Self.deadSpaceProfile()
             }
         }
@@ -221,8 +227,21 @@ private final class MappingSession {
     static func deadSpaceProfile() -> ScreenProfile {
         ScreenProfile(enabled: true, deadzone: 0.15, bindings: [
             ScreenBinding(control: 15, x: 0.18, y: 0.75, radius: 0.14),
-            ScreenBinding(control: 6, x: 0.7, y: 0.5, cursorClick: true)
-        ], cursor: ScreenCursor())
+            ScreenBinding(control: 16, x: 0.72, y: 0.5, radius: 0.3, swipe: ScreenSwipe()),
+            ScreenBinding(control: 7, x: 0.7, y: 0.5, cursorClick: true)
+        ], cursor: ScreenCursor(enabled: false))
+    }
+
+    static func upgradedCamera(_ input: ScreenProfile) -> ScreenProfile {
+        var p = input
+        if p.cursor?.enabled != true,
+           let index = p.bindings.firstIndex(where: { $0.control == 16 }) {
+            // The requested right-stick role is camera look. Keep the saved
+            // center; explicit virtual-joystick mode remains selectable.
+            if p.bindings[index].swipe == nil { p.bindings[index].swipe = ScreenSwipe() }
+            p.bindings[index].radius = max(0.3, p.bindings[index].radius)
+        }
+        return p
     }
 
     func changed() {
@@ -314,7 +333,8 @@ private final class MappingSession {
             p.bindings[index].y = y
             p.bindings[index].cursorClick = nil
         } else {
-            p.bindings.append(ScreenBinding(control: selected, x: x, y: y))
+            p.bindings.append(ScreenBinding(control: selected, x: x, y: y,
+                radius: selected == 16 ? 0.3 : 0.12, swipe: selected == 16 ? ScreenSwipe() : nil))
         }
         p.enabled = true
         profile = p
@@ -368,7 +388,11 @@ private final class MappingSession {
         let cameraBinding = profile.bindings.first { $0.control == 16 && $0.swipe != nil }
         let temporaryCursor = cameraBinding?.swipe?.cursorWithL1 == true && buttons[4] >= 0.25
         let cursorActive = profile.cursor?.enabled == true || temporaryCursor
-        if runtimeCursorVisible != cursorActive { runtimeCursorVisible = cursorActive; canvas.setNeedsDisplay() }
+        if runtimeCursorVisible != cursorActive {
+            runtimeCursorVisible = cursorActive
+            controller?.updateModeLabel()
+            canvas.setNeedsDisplay()
+        }
         if cursorActive {
             let (x, y) = sticks[1]
             let magnitude = hypotf(x, y)
@@ -410,15 +434,19 @@ private final class MappingSession {
                 let distance = (min(1, magnitude) - profile.deadzone) / (1 - profile.deadzone)
                 let radius = binding.radius * shorter
                 if let swipe = binding.swipe {
-                    let speed = swipe.speed * shorter * distance * dt
-                    let delta = SIMD2<Float>(x / magnitude * speed / Float(viewport.width),
-                        y / magnitude * speed / Float(viewport.height) * (swipe.invertY ? -1 : 1))
+                    let direction = ControllerCameraResponse.direction(SIMD2<Float>(x, y),
+                        deadzone: profile.deadzone, precise: swipe.precise != false)
+                    let speed = swipe.speed * shorter * dt
+                    let delta = SIMD2<Float>(direction.x * speed / Float(viewport.width),
+                        direction.y * speed / Float(viewport.height) * (swipe.invertY ? -1 : 1))
                     var tracker = swipeTrackers[binding.control] ?? ControllerSwipeTracker()
-                    let point = tracker.sample(anchor: SIMD2<Float>(binding.x, binding.y),
-                        halfSize: SIMD2<Float>(radius / Float(viewport.width), radius / Float(viewport.height)), delta: delta)
+                    let contact = tracker.sample(anchor: SIMD2<Float>(binding.x, binding.y),
+                        halfSize: SIMD2<Float>(radius / Float(viewport.width), radius / Float(viewport.height)),
+                        delta: delta, elapsed: dt)
                     swipeTrackers[binding.control] = tracker
-                    if let point = point {
-                        result.append([Float(binding.control), point.x, point.y, binding.x, binding.y])
+                    if let contact = contact {
+                        result.append([Float(binding.control), contact.point.x, contact.point.y,
+                                       contact.start.x, contact.start.y])
                     }
                     continue
                 }
@@ -474,6 +502,9 @@ private final class MappingViewController: UIViewController {
     let invertY = UISwitch()
     let cursorModifierLabel = UILabel()
     let cursorModifier = UISwitch()
+    let responseLabel = UILabel()
+    let responseMode = UISegmentedControl(items: ["线性", "精细瞄准"])
+    let modeLabel = UILabel()
     var choiceButtons: [UIButton] = []
     var controlsCollapsed = false
 
@@ -508,6 +539,13 @@ private final class MappingViewController: UIViewController {
         placementHint.layer.cornerRadius = 8
         placementHint.clipsToBounds = true
         view.addSubview(placementHint)
+        modeLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        modeLabel.textColor = .white
+        modeLabel.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        modeLabel.textAlignment = .center
+        modeLabel.layer.cornerRadius = 8
+        modeLabel.clipsToBounds = true
+        view.addSubview(modeLabel)
         panel.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.96)
         panel.layer.cornerRadius = 16
         view.addSubview(panel)
@@ -515,7 +553,7 @@ private final class MappingViewController: UIViewController {
         settingsScroll.addSubview(settingsContent)
         settingsScroll.alwaysBounceVertical = true
         settingsScroll.showsVerticalScrollIndicator = true
-        for label in [titleLabel, connection, hint, selectedLabel, radiusLabel, deadzoneLabel, cursorLabel, cursorSpeedLabel, invertYLabel, cursorModifierLabel] {
+        for label in [titleLabel, connection, hint, selectedLabel, radiusLabel, deadzoneLabel, cursorLabel, cursorSpeedLabel, invertYLabel, cursorModifierLabel, responseLabel] {
             label.font = .systemFont(ofSize: 12)
             label.textColor = .label
             if label === titleLabel || label === connection { panel.addSubview(label) }
@@ -559,6 +597,9 @@ private final class MappingViewController: UIViewController {
         cursorModifierLabel.text = "按住 L1/LB 临时用游标"
         settingsContent.addSubview(cursorModifier)
         cursorModifier.addTarget(self, action: #selector(changeCursorModifier), for: .valueChanged)
+        responseLabel.text = "视角响应"
+        settingsContent.addSubview(responseMode)
+        responseMode.addTarget(self, action: #selector(changeResponseMode), for: .valueChanged)
         cursorLabel.text = "右摇杆移动游标"
         settingsContent.addSubview(cursorEnabled)
         cursorEnabled.addTarget(self, action: #selector(toggleCursor), for: .valueChanged)
@@ -594,6 +635,8 @@ private final class MappingViewController: UIViewController {
         canvas.frame = view.bounds
         let safe = view.safeAreaInsets
         open.frame = CGRect(x: safe.left + 12, y: safe.top + 8, width: 66, height: 36)
+        modeLabel.frame = CGRect(x: view.bounds.width - safe.right - 172, y: safe.top + 8,
+                                 width: 160, height: 24)
         placementHint.frame = CGRect(x: open.frame.maxX + 8, y: safe.top + 8,
                                      width: max(0, view.bounds.width - safe.right - open.frame.maxX - 20), height: 40)
         let width = min(500, view.bounds.width - safe.left - safe.right - 16)
@@ -611,7 +654,7 @@ private final class MappingViewController: UIViewController {
         choices.frame = CGRect(origin: .zero, size: CGSize(width: choiceSize.width, height: 33))
         scroll.contentSize = choices.bounds.size
         settingsScroll.frame = CGRect(x: 0, y: 119, width: width, height: max(30, height - 155))
-        settingsContent.frame = CGRect(x: 0, y: 0, width: width, height: 279)
+        settingsContent.frame = CGRect(x: 0, y: 0, width: width, height: 315)
         settingsScroll.contentSize = settingsContent.bounds.size
         selectedLabel.frame = CGRect(x: 10, y: 0, width: width - 20, height: 18)
         targetMode.frame = CGRect(x: 10, y: 22, width: width - 20, height: 27)
@@ -626,9 +669,11 @@ private final class MappingViewController: UIViewController {
         cursorSpeed.frame = CGRect(x: 95, y: 137, width: width - 105, height: 30)
         invertYLabel.frame = CGRect(x: 10, y: 172, width: width - 80, height: 25)
         invertY.frame = CGRect(x: width - 62, y: 169, width: 51, height: 31)
-        cursorModifierLabel.frame = CGRect(x: 10, y: 208, width: width - 80, height: 25)
-        cursorModifier.frame = CGRect(x: width - 62, y: 205, width: 51, height: 31)
-        hint.frame = CGRect(x: 10, y: 240, width: width - 20, height: 35)
+        responseLabel.frame = CGRect(x: 10, y: 208, width: 85, height: 25)
+        responseMode.frame = CGRect(x: 95, y: 205, width: width - 105, height: 28)
+        cursorModifierLabel.frame = CGRect(x: 10, y: 244, width: width - 80, height: 25)
+        cursorModifier.frame = CGRect(x: width - 62, y: 241, width: 51, height: 31)
+        hint.frame = CGRect(x: 10, y: 276, width: width - 20, height: 35)
         panel.viewWithTag(100)?.frame = CGRect(x: 8, y: height - 32, width: width - 16, height: 28)
         updateViewport()
     }
@@ -660,12 +705,13 @@ private final class MappingViewController: UIViewController {
         enabled.isOn = session.profile.enabled
         let binding = session.profile.bindings.first { $0.control == session.selected }
         let isSwipe = binding?.swipe != nil
+        updateModeLabel()
         targetMode.isHidden = session.selected >= 15
         stickMode.isHidden = session.selected < 15
         stickMode.setEnabled(session.selected == 16, forSegmentAt: 2)
         stickMode.selectedSegmentIndex = session.selected == 16 && session.profile.cursor?.enabled == true
             ? 2 : (isSwipe ? 1 : 0)
-        selectedLabel.text = "\(controlNames[session.selected])：\(binding?.cursorClick == true ? "点击当前游标" : (binding == nil ? "点画面添加" : "拖动标记调整"))"
+        selectedLabel.text = "\(controlNames[session.selected])：\(isSwipe ? "持续视角滑动" : (binding?.cursorClick == true ? "点击当前游标" : (binding == nil ? "点画面添加" : "拖动标记调整")))"
         targetMode.isEnabled = session.selected < 15
         targetMode.selectedSegmentIndex = binding?.cursorClick == true ? 1 : 0
         radius.isEnabled = session.selected >= 15 && binding != nil
@@ -682,6 +728,8 @@ private final class MappingViewController: UIViewController {
         invertY.isOn = binding?.swipe?.invertY ?? false
         cursorModifier.isEnabled = isSwipe && session.selected == 16
         cursorModifier.isOn = binding?.swipe?.cursorWithL1 ?? false
+        responseMode.isEnabled = isSwipe
+        responseMode.selectedSegmentIndex = binding?.swipe?.precise == false ? 0 : 1
         hint.text = session.status
         for button in choiceButtons {
             let mapped = session.profile.bindings.contains { $0.control == button.tag }
@@ -709,7 +757,9 @@ private final class MappingViewController: UIViewController {
         guard (0..<3).contains(stickControls.selectedSegmentIndex) else { return }
         session.selected = 15 + stickControls.selectedSegmentIndex
         session.placingSelected = true
-        session.status = "点游戏虚拟摇杆的中心，展开后调整摇杆范围并保存"
+        session.status = session.selected == 16
+            ? "点能用手指滑动视角的区域，展开后选择视角滑动并保存"
+            : "点游戏虚拟摇杆的中心，展开后调整摇杆范围并保存"
         controlsCollapsed = true
         refresh()
     }
@@ -768,10 +818,10 @@ private final class MappingViewController: UIViewController {
             if session.selected == 16, var cursor = p.cursor { cursor.enabled = false; p.cursor = cursor }
             if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
                 p.bindings[index].swipe = stickMode.selectedSegmentIndex == 1 ? ScreenSwipe() : nil
-                if stickMode.selectedSegmentIndex == 1 { p.bindings[index].radius = max(0.2, p.bindings[index].radius) }
+                if stickMode.selectedSegmentIndex == 1 { p.bindings[index].radius = max(0.3, p.bindings[index].radius) }
             } else {
                 p.bindings.append(ScreenBinding(control: session.selected,
-                    x: session.selected == 16 ? 0.75 : 0.2, y: 0.5, radius: 0.2,
+                    x: session.selected == 16 ? 0.72 : 0.2, y: 0.5, radius: 0.3,
                     swipe: stickMode.selectedSegmentIndex == 1 ? ScreenSwipe() : nil))
             }
         }
@@ -795,6 +845,20 @@ private final class MappingViewController: UIViewController {
             p.bindings[index].swipe?.cursorWithL1 = cursorModifier.isOn
         }
         session.profile = p; session.changed()
+    }
+    @objc func changeResponseMode() {
+        var p = session.profile
+        if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+            p.bindings[index].swipe?.precise = responseMode.selectedSegmentIndex == 1
+        }
+        session.profile = p; session.changed()
+    }
+
+    func updateModeLabel() {
+        modeLabel.isHidden = session.editing || !session.profile.enabled
+        let cursor = session.profile.cursor?.enabled == true || session.runtimeCursorVisible
+        let camera = session.profile.bindings.contains { $0.control == 16 && $0.swipe != nil }
+        modeLabel.text = cursor ? "右摇杆 · 游标" : (camera ? "右摇杆 · 视角滑动" : "右摇杆 · 虚拟摇杆")
     }
     @objc func applyPreset() {
         session.profile = MappingSession.deadSpaceProfile()

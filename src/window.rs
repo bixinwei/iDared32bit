@@ -294,6 +294,8 @@ pub struct Window {
     mapping_game: Option<(std::ffi::CString, std::ffi::CString)>,
     #[cfg(target_os = "ios")]
     mapping_touches: crate::controller_mapping::TouchState,
+    #[cfg(target_os = "ios")]
+    mapping_clock: crate::controller_mapping::DeliveryClock,
     /// Whether to show the on-screen Home button, see
     /// [Self::enable_on_screen_home_button].
     on_screen_home_button: bool,
@@ -483,6 +485,8 @@ impl Window {
             mapping_game: None,
             #[cfg(target_os = "ios")]
             mapping_touches: Default::default(),
+            #[cfg(target_os = "ios")]
+            mapping_clock: Default::default(),
             on_screen_home_button: false,
             home_button_press: None,
             on_main_stack: true,
@@ -1078,6 +1082,8 @@ impl Window {
             self.event_queue.push_back(Event::TouchesUp(releases));
         }
         self.mapping_touches = Default::default();
+        #[cfg(target_os = "ios")]
+        { self.mapping_clock = Default::default(); }
         self.virtual_cursor_last = None;
         self.virtual_cursor_last_unsticky = None;
         self.controller_back_held_since = None;
@@ -1106,6 +1112,9 @@ impl Window {
     #[cfg(target_os = "ios")]
     fn poll_controller_mapping(&mut self) {
         use crate::controller_mapping::{native, Change};
+        if !self.mapping_clock.take_sample(Instant::now()) {
+            return;
+        }
         let Some(game) = &self.mapping_game else {
             return;
         };
@@ -1188,6 +1197,13 @@ impl Window {
             };
             self.queue_input_event(event);
         }
+    }
+
+    /// The guest has drained its input batch. Permit one new mapper sample on
+    /// the host's main stack, and wake the guest for the next delivery.
+    #[cfg(target_os = "ios")]
+    pub fn request_controller_mapping_sample(&mut self) -> Instant {
+        self.mapping_clock.request(Instant::now())
     }
 
     /// Show the on-screen Home button, on platforms without another way to

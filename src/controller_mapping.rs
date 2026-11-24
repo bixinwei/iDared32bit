@@ -7,6 +7,37 @@
 //! Coordinates use the visible game viewport's unit square, excluding bars.
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
+
+/// Sample once per guest delivery, at most 60 Hz. Host polling during a slow
+/// guest callback must not queue an entire lift/restart before the next frame.
+pub struct DeliveryClock {
+    requested: bool,
+    next_due: Option<Instant>,
+}
+
+impl Default for DeliveryClock {
+    fn default() -> Self {
+        Self { requested: true, next_due: None }
+    }
+}
+
+impl DeliveryClock {
+    pub fn take_sample(&mut self, now: Instant) -> bool {
+        if !self.requested || self.next_due.is_some_and(|due| now < due) {
+            return false;
+        }
+        self.requested = false;
+        self.next_due = Some(now + Duration::from_secs_f64(1.0 / 60.0));
+        true
+    }
+
+    /// Called after the guest has consumed the preceding event batch.
+    pub fn request(&mut self, now: Instant) -> Instant {
+        self.requested = true;
+        self.next_due.unwrap_or(now)
+    }
+}
 
 pub const CONTROL_COUNT: usize = 18;
 pub const SNAPSHOT_SIZE: usize = 3 + CONTROL_COUNT * 5;
@@ -222,6 +253,35 @@ pub mod native {
 #[cfg(test)]
 mod controller_mapping_tests {
     use super::*;
+    #[test]
+    fn host_polling_cannot_run_ahead_of_guest_delivery() {
+        let mut clock = DeliveryClock::default();
+        let now = Instant::now();
+        assert!(clock.take_sample(now));
+        // A long guest frame/callback can yield to host polling many times.
+        for tick in 1..120 {
+            assert!(!clock.take_sample(now + Duration::from_millis(tick * 10)));
+        }
+        clock.request(now + Duration::from_secs(2));
+        assert!(clock.take_sample(now + Duration::from_secs(2)));
+        assert!(!clock.take_sample(now + Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn guest_delivery_respects_cadence_without_catching_up() {
+        let mut clock = DeliveryClock::default();
+        let now = Instant::now();
+        assert!(clock.take_sample(now));
+        let due = clock.request(now);
+        assert!(!clock.take_sample(now + Duration::from_millis(8)));
+        assert!(clock.take_sample(due));
+        let late = now + Duration::from_secs(2);
+        clock.request(late);
+        assert!(clock.take_sample(late));
+        assert_eq!(clock.request(late), late + Duration::from_secs_f64(1.0 / 60.0));
+        assert!(!clock.take_sample(late));
+    }
+
     fn button(id: u8, point: (f32, f32)) -> Contact {
         Contact {
             id,

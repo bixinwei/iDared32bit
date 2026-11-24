@@ -210,5 +210,12 @@ pub fn handle_events(env: &mut Environment) -> Option<Instant> {
         }
     }
 
-    ui_accelerometer::handle_accelerometer(env)
+    let next_due = ui_accelerometer::handle_accelerometer(env);
+    #[cfg(target_os = "ios")]
+    {
+        let mapping_due = env.window_mut().request_controller_mapping_sample();
+        Some(next_due.map_or(mapping_due, |due| due.min(mapping_due)))
+    }
+    #[cfg(not(target_os = "ios"))]
+    { next_due }
 }
