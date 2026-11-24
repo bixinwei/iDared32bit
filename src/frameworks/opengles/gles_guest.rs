@@ -17,7 +17,7 @@ use touchHLE_gl_bindings::gles11::{
     WRITE_ONLY_OES,
 };
 
-use crate::dyld::{export_c_func, FunctionExports};
+use crate::dyld::{export_c_func, export_c_func_aliased, FunctionExports};
 use crate::frameworks::opengles::eagl::EAGLContextHostObject;
 use crate::gles::{gles11_raw as gles11, GLES}; // constants only
 use crate::mem::{ConstPtr, ConstVoidPtr, GuestISize, GuestUSize, Mem, MutPtr, MutVoidPtr, Ptr};
@@ -1630,6 +1630,39 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(glMultiTexCoord4f(_, _, _, _, _)),
     export_c_func!(glMultiTexCoord4x(_, _, _, _, _)),
     // OES_framebuffer_object
+    // ES 2.0 promoted this extension to core with identical argument types
+    // and enum values. Export the unsuffixed names using the real existing
+    // implementation; this does not add shader/ES 2.0 context support.
+    export_c_func_aliased!("glGenFramebuffers", glGenFramebuffersOES(_, _)),
+    export_c_func_aliased!("glGenRenderbuffers", glGenRenderbuffersOES(_, _)),
+    export_c_func_aliased!("glIsFramebuffer", glIsFramebufferOES(_)),
+    export_c_func_aliased!("glIsRenderbuffer", glIsRenderbufferOES(_)),
+    export_c_func_aliased!("glBindFramebuffer", glBindFramebufferOES(_, _)),
+    export_c_func_aliased!("glBindRenderbuffer", glBindRenderbufferOES(_, _)),
+    export_c_func_aliased!(
+        "glRenderbufferStorage",
+        glRenderbufferStorageOES(_, _, _, _)
+    ),
+    export_c_func_aliased!(
+        "glFramebufferRenderbuffer",
+        glFramebufferRenderbufferOES(_, _, _, _)
+    ),
+    export_c_func_aliased!(
+        "glFramebufferTexture2D",
+        glFramebufferTexture2DOES(_, _, _, _, _)
+    ),
+    export_c_func_aliased!(
+        "glGetFramebufferAttachmentParameteriv",
+        glGetFramebufferAttachmentParameterivOES(_, _, _, _)
+    ),
+    export_c_func_aliased!(
+        "glGetRenderbufferParameteriv",
+        glGetRenderbufferParameterivOES(_, _, _)
+    ),
+    export_c_func_aliased!("glCheckFramebufferStatus", glCheckFramebufferStatusOES(_)),
+    export_c_func_aliased!("glDeleteFramebuffers", glDeleteFramebuffersOES(_, _)),
+    export_c_func_aliased!("glDeleteRenderbuffers", glDeleteRenderbuffersOES(_, _)),
+    export_c_func_aliased!("glGenerateMipmap", glGenerateMipmapOES(_)),
     export_c_func!(glGenFramebuffersOES(_, _)),
     export_c_func!(glGenRenderbuffersOES(_, _)),
     export_c_func!(glIsFramebufferOES(_)),
@@ -1650,6 +1683,37 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(glMapBufferOES(_, _)),
     export_c_func!(glUnmapBufferOES(_)),
 ];
+
+#[cfg(test)]
+mod framebuffer_export_tests {
+    use super::*;
+
+    #[test]
+    fn core_framebuffer_names_resolve_to_the_extension_implementation() {
+        for name in [
+            "glGenFramebuffers",
+            "glGenRenderbuffers",
+            "glIsFramebuffer",
+            "glIsRenderbuffer",
+            "glBindFramebuffer",
+            "glBindRenderbuffer",
+            "glRenderbufferStorage",
+            "glFramebufferRenderbuffer",
+            "glFramebufferTexture2D",
+            "glGetFramebufferAttachmentParameteriv",
+            "glGetRenderbufferParameteriv",
+            "glCheckFramebufferStatus",
+            "glDeleteFramebuffers",
+            "glDeleteRenderbuffers",
+            "glGenerateMipmap",
+        ] {
+            let core = format!("_{name}");
+            let extension = format!("_{name}OES");
+            let find = |symbol: &str| FUNCTIONS.iter().find(|(n, _)| *n == symbol).unwrap().1;
+            assert!(std::ptr::eq(find(&core), find(&extension)), "{name}");
+        }
+    }
+}
 
 fn _get_currently_bound_buffer_object_name(env: &mut Environment, target: GLenum) -> GLuint {
     with_ctx_and_mem(env, |gles, _mem| unsafe {
