@@ -137,6 +137,7 @@ private final class MappingSession {
     var orientation: Int32 = -1
     var editing = false
     var selected = 0
+    var placingSelected = false
     var revision: UInt32 = 1
     var waitingForNeutral = true
     var lastController: ObjectIdentifier?
@@ -418,6 +419,10 @@ private final class MappingViewController: UIViewController {
     let cursorSpeedLabel = UILabel()
     let scroll = UIScrollView()
     let choices = UIStackView()
+    let stickControls = UISegmentedControl(items: ["左摇杆映射", "右摇杆映射", "十字键映射"])
+    let settingsScroll = UIScrollView()
+    let settingsContent = UIView()
+    let placementHint = UILabel()
     var choiceButtons: [UIButton] = []
     var controlsCollapsed = false
 
@@ -445,13 +450,25 @@ private final class MappingViewController: UIViewController {
         open.layer.cornerRadius = 18
         open.accessibilityLabel = "编辑手柄屏幕映射"
         view.addSubview(open)
+        placementHint.font = .systemFont(ofSize: 12, weight: .semibold)
+        placementHint.textColor = .white
+        placementHint.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        placementHint.numberOfLines = 2
+        placementHint.layer.cornerRadius = 8
+        placementHint.clipsToBounds = true
+        view.addSubview(placementHint)
         panel.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.96)
         panel.layer.cornerRadius = 16
         view.addSubview(panel)
+        panel.addSubview(settingsScroll)
+        settingsScroll.addSubview(settingsContent)
+        settingsScroll.alwaysBounceVertical = true
+        settingsScroll.showsVerticalScrollIndicator = true
         for label in [titleLabel, connection, hint, selectedLabel, radiusLabel, deadzoneLabel, cursorLabel, cursorSpeedLabel] {
             label.font = .systemFont(ofSize: 12)
             label.textColor = .label
-            panel.addSubview(label)
+            if label === titleLabel || label === connection { panel.addSubview(label) }
+            else { settingsContent.addSubview(label) }
         }
         titleLabel.font = .boldSystemFont(ofSize: 14)
         hint.numberOfLines = 2
@@ -462,7 +479,9 @@ private final class MappingViewController: UIViewController {
         choices.spacing = 6
         scroll.addSubview(choices)
         panel.addSubview(scroll)
-        for (index, name) in controlNames.enumerated() {
+        panel.addSubview(stickControls)
+        stickControls.addTarget(self, action: #selector(selectStick), for: .valueChanged)
+        for (index, name) in controlNames.prefix(15).enumerated() {
             let button = UIButton(type: .system)
             button.tag = index
             configure(button, name, action: #selector(selectControl(_:)))
@@ -474,20 +493,20 @@ private final class MappingViewController: UIViewController {
         radius.minimumValue = 0.025
         radius.maximumValue = 0.3
         radius.addTarget(self, action: #selector(changeRadius), for: .valueChanged)
-        panel.addSubview(radius)
+        settingsContent.addSubview(radius)
         deadzone.minimumValue = 0.05
         deadzone.maximumValue = 0.5
         deadzone.addTarget(self, action: #selector(changeDeadzone), for: .valueChanged)
-        panel.addSubview(deadzone)
-        panel.addSubview(targetMode)
+        settingsContent.addSubview(deadzone)
+        settingsContent.addSubview(targetMode)
         targetMode.addTarget(self, action: #selector(changeTarget), for: .valueChanged)
         cursorLabel.text = "右摇杆移动游标"
-        panel.addSubview(cursorEnabled)
+        settingsContent.addSubview(cursorEnabled)
         cursorEnabled.addTarget(self, action: #selector(toggleCursor), for: .valueChanged)
         cursorSpeed.minimumValue = 0.2
         cursorSpeed.maximumValue = 2
         cursorSpeed.addTarget(self, action: #selector(changeCursorSpeed), for: .valueChanged)
-        panel.addSubview(cursorSpeed)
+        settingsContent.addSubview(cursorSpeed)
         let actions = UIStackView()
         actions.axis = .horizontal
         actions.distribution = .fillEqually
@@ -516,31 +535,37 @@ private final class MappingViewController: UIViewController {
         canvas.frame = view.bounds
         let safe = view.safeAreaInsets
         open.frame = CGRect(x: safe.left + 12, y: safe.top + 8, width: 66, height: 36)
+        placementHint.frame = CGRect(x: open.frame.maxX + 8, y: safe.top + 8,
+                                     width: max(0, view.bounds.width - safe.right - open.frame.maxX - 20), height: 40)
         let width = min(500, view.bounds.width - safe.left - safe.right - 16)
         // Dock the editor along the bottom; hide it to position a key underneath.
-        let height: CGFloat = 308
+        let height = min(CGFloat(350), view.bounds.height - safe.top - safe.bottom - 56)
         panel.frame = CGRect(x: (view.bounds.width - width) / 2,
                              y: view.bounds.height - safe.bottom - height - 4,
                              width: width, height: height)
         titleLabel.frame = CGRect(x: 10, y: 7, width: width - 75, height: 20)
         enabled.frame = CGRect(x: width - 62, y: 5, width: 51, height: 31)
         connection.frame = CGRect(x: 10, y: 28, width: width - 80, height: 16)
-        scroll.frame = CGRect(x: 8, y: 47, width: width - 16, height: 33)
+        stickControls.frame = CGRect(x: 10, y: 47, width: width - 20, height: 30)
+        scroll.frame = CGRect(x: 8, y: 82, width: width - 16, height: 33)
         let choiceSize = choices.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
         choices.frame = CGRect(origin: .zero, size: CGSize(width: choiceSize.width, height: 33))
         scroll.contentSize = choices.bounds.size
-        selectedLabel.frame = CGRect(x: 10, y: 83, width: width - 20, height: 18)
-        targetMode.frame = CGRect(x: 10, y: 103, width: width - 20, height: 27)
-        radiusLabel.frame = CGRect(x: 10, y: 134, width: 90, height: 22)
-        radius.frame = CGRect(x: 95, y: 130, width: width - 105, height: 30)
-        deadzoneLabel.frame = CGRect(x: 10, y: 164, width: 90, height: 22)
-        deadzone.frame = CGRect(x: 95, y: 160, width: width - 105, height: 30)
-        cursorLabel.frame = CGRect(x: 10, y: 192, width: width - 80, height: 25)
-        cursorEnabled.frame = CGRect(x: width - 62, y: 189, width: 51, height: 31)
-        cursorSpeedLabel.frame = CGRect(x: 10, y: 222, width: 90, height: 22)
-        cursorSpeed.frame = CGRect(x: 95, y: 218, width: width - 105, height: 30)
-        hint.frame = CGRect(x: 10, y: 249, width: width - 20, height: 28)
-        panel.viewWithTag(100)?.frame = CGRect(x: 8, y: 277, width: width - 16, height: 28)
+        settingsScroll.frame = CGRect(x: 0, y: 119, width: width, height: max(30, height - 155))
+        settingsContent.frame = CGRect(x: 0, y: 0, width: width, height: 207)
+        settingsScroll.contentSize = settingsContent.bounds.size
+        selectedLabel.frame = CGRect(x: 10, y: 0, width: width - 20, height: 18)
+        targetMode.frame = CGRect(x: 10, y: 22, width: width - 20, height: 27)
+        radiusLabel.frame = CGRect(x: 10, y: 53, width: 90, height: 22)
+        radius.frame = CGRect(x: 95, y: 49, width: width - 105, height: 30)
+        deadzoneLabel.frame = CGRect(x: 10, y: 83, width: 90, height: 22)
+        deadzone.frame = CGRect(x: 95, y: 79, width: width - 105, height: 30)
+        cursorLabel.frame = CGRect(x: 10, y: 111, width: width - 80, height: 25)
+        cursorEnabled.frame = CGRect(x: width - 62, y: 108, width: 51, height: 31)
+        cursorSpeedLabel.frame = CGRect(x: 10, y: 141, width: 90, height: 22)
+        cursorSpeed.frame = CGRect(x: 95, y: 137, width: width - 105, height: 30)
+        hint.frame = CGRect(x: 10, y: 168, width: width - 20, height: 35)
+        panel.viewWithTag(100)?.frame = CGRect(x: 8, y: height - 32, width: width - 16, height: 28)
         updateViewport()
     }
 
@@ -562,6 +587,10 @@ private final class MappingViewController: UIViewController {
         guard isViewLoaded else { return }
         canvas.isUserInteractionEnabled = session.editing
         panel.isHidden = !session.editing || controlsCollapsed
+        placementHint.isHidden = !session.editing || !controlsCollapsed
+        placementHint.text = " \(controlNames[session.selected])：点游戏画面放置，展开后调整范围并保存"
+        stickControls.selectedSegmentIndex = session.selected >= 15
+            ? session.selected - 15 : UISegmentedControl.noSegment
         open.setTitle(session.editing ? (controlsCollapsed ? "展开" : "收起") : "手柄", for: .normal)
         titleLabel.text = "\(session.gameName) · \(session.landscape ? "横屏" : "竖屏")映射"
         enabled.isOn = session.profile.enabled
@@ -596,7 +625,19 @@ private final class MappingViewController: UIViewController {
             refresh()
         } else { controlsCollapsed = false; session.beginEditing() }
     }
-    @objc func selectControl(_ sender: UIButton) { session.selected = sender.tag; refresh() }
+    @objc func selectControl(_ sender: UIButton) {
+        session.selected = sender.tag
+        session.placingSelected = true
+        refresh()
+    }
+    @objc func selectStick() {
+        guard (0..<3).contains(stickControls.selectedSegmentIndex) else { return }
+        session.selected = 15 + stickControls.selectedSegmentIndex
+        session.placingSelected = true
+        session.status = "点游戏虚拟摇杆的中心，展开后调整摇杆范围并保存"
+        controlsCollapsed = true
+        refresh()
+    }
     @objc func toggleEnabled() {
         var p = session.profile; p.enabled = enabled.isOn; session.profile = p; session.changed()
     }
@@ -710,9 +751,10 @@ private final class MappingCanvas: UIView {
         let nearest = session.profile.bindings.filter { $0.cursorClick != true }.min {
             distance($0, point) < distance($1, point)
         }
-        if let nearest = nearest, distance(nearest, point) < 27 {
+        if !session.placingSelected, let nearest = nearest, distance(nearest, point) < 27 {
             session.selected = nearest.control
         }
+        session.placingSelected = false
         dragging = true
         session.place(at: point, viewport: viewport)
     }
