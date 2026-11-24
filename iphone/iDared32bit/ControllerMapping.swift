@@ -230,6 +230,7 @@ private final class MappingSession {
         revision = revision % 16_000_000 + 1
         waitingForNeutral = true
         swipeTrackers.removeAll()
+        runtimeCursorVisible = false
         controller?.refresh()
     }
 
@@ -735,7 +736,9 @@ private final class MappingViewController: UIViewController {
             } else {
                 p.bindings.append(ScreenBinding(control: session.selected, x: 0.5, y: 0.5, cursorClick: true))
             }
-            var cursor = p.cursor ?? ScreenCursor(); cursor.enabled = true; p.cursor = cursor
+            var cursor = p.cursor ?? ScreenCursor()
+            cursor.enabled = !p.bindings.contains { $0.control == 16 && $0.swipe != nil }
+            p.cursor = cursor
             p.enabled = true
         } else if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
             p.bindings[index].cursorClick = nil
@@ -765,6 +768,7 @@ private final class MappingViewController: UIViewController {
             if session.selected == 16, var cursor = p.cursor { cursor.enabled = false; p.cursor = cursor }
             if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
                 p.bindings[index].swipe = stickMode.selectedSegmentIndex == 1 ? ScreenSwipe() : nil
+                if stickMode.selectedSegmentIndex == 1 { p.bindings[index].radius = max(0.2, p.bindings[index].radius) }
             } else {
                 p.bindings.append(ScreenBinding(control: session.selected,
                     x: session.selected == 16 ? 0.75 : 0.2, y: 0.5, radius: 0.2,
