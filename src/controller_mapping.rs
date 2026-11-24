@@ -269,6 +269,20 @@ mod controller_mapping_tests {
     }
 
     #[test]
+    fn cursor_click_drags_and_releases_at_last_cursor_position() {
+        let mut state = TouchState::default();
+        assert_eq!(
+            state.update(1, &[button(6, (200.0, 100.0))]),
+            vec![Change::Down(6, (200.0, 100.0))]
+        );
+        assert_eq!(
+            state.update(1, &[button(6, (240.0, 180.0))]),
+            vec![Change::Move(6, (240.0, 180.0))]
+        );
+        assert_eq!(state.update(1, &[]), vec![Change::Up(6, (240.0, 180.0))]);
+    }
+
+    #[test]
     fn editing_disabling_and_disconnect_release_held_touches() {
         let mut state = TouchState::default();
         for values in [

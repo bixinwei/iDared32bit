@@ -14,12 +14,19 @@ private struct ScreenBinding: Codable {
     var y: Float
     /// Joystick radius as a fraction of the viewport's shorter side.
     var radius: Float = 0.12
+    var cursorClick: Bool?
+}
+
+private struct ScreenCursor: Codable {
+    var enabled = true
+    var speed: Float = 0.8
 }
 
 private struct ScreenProfile: Codable {
     var enabled = false
     var deadzone: Float = 0.15
     var bindings: [ScreenBinding] = []
+    var cursor: ScreenCursor?
 }
 
 private struct ScreenConfiguration: Codable {
@@ -100,6 +107,10 @@ private final class MappingSession {
     var controller: MappingViewController?
     weak var gameView: UIView?
     var status = ""
+    var cursorPoint = CGPoint(x: 0.7, y: 0.5)
+    var cursorHeld = false
+    var lastSampleTime = ProcessInfo.processInfo.systemUptime
+    var isDeadSpace: Bool { gameID.lowercased().hasPrefix("com.ea.deadspace") }
     var profile: ScreenProfile {
         get { landscape ? configuration.landscape : configuration.portrait }
         set {
@@ -125,6 +136,11 @@ private final class MappingSession {
             configuration = loaded
         } else {
             configuration = ScreenConfiguration()
+            if gameID.lowercased().hasPrefix("com.ea.deadspace") {
+                // Starting layout, not a claim about every level's controls.
+                // The cursor is what makes arbitrary contextual targets usable.
+                configuration.landscape = Self.deadSpaceProfile()
+            }
         }
         saved = configuration
     }
@@ -132,6 +148,10 @@ private final class MappingSession {
     static func validated(_ input: ScreenProfile) -> ScreenProfile {
         var result = input
         result.deadzone = input.deadzone.isFinite ? min(0.5, max(0.05, input.deadzone)) : 0.15
+        if var cursor = result.cursor {
+            cursor.speed = cursor.speed.isFinite ? min(2, max(0.2, cursor.speed)) : 0.8
+            result.cursor = cursor
+        }
         var seen = Set<Int>()
         result.bindings = input.bindings.filter {
             (0..<18).contains($0.control) && $0.x.isFinite && $0.y.isFinite
@@ -140,6 +160,13 @@ private final class MappingSession {
                 && seen.insert($0.control).inserted
         }
         return result
+    }
+
+    static func deadSpaceProfile() -> ScreenProfile {
+        ScreenProfile(enabled: true, deadzone: 0.15, bindings: [
+            ScreenBinding(control: 15, x: 0.18, y: 0.75, radius: 0.14),
+            ScreenBinding(control: 6, x: 0.7, y: 0.5, cursorClick: true)
+        ], cursor: ScreenCursor())
     }
 
     func changed() {
@@ -219,11 +246,13 @@ private final class MappingSession {
         let x = Float(min(0.98, max(0.02, (point.x - viewport.minX) / viewport.width)))
         let y = Float(min(0.98, max(0.02, (point.y - viewport.minY) / viewport.height)))
         var p = profile
+        if selected == 16, var cursor = p.cursor { cursor.enabled = false; p.cursor = cursor }
         if selected == 17 { p.bindings.removeAll { (11...14).contains($0.control) } }
         else if (11...14).contains(selected) { p.bindings.removeAll { $0.control == 17 } }
         if let index = p.bindings.firstIndex(where: { $0.control == selected }) {
             p.bindings[index].x = x
             p.bindings[index].y = y
+            p.bindings[index].cursorClick = nil
         } else {
             p.bindings.append(ScreenBinding(control: selected, x: x, y: y))
         }
@@ -233,6 +262,10 @@ private final class MappingSession {
     }
 
     func contacts() -> [[Float]] {
+        let now = ProcessInfo.processInfo.systemUptime
+        let dt = Float(min(0.05, max(0, now - lastSampleTime)))
+        lastSampleTime = now
+        if cursorHeld { cursorHeld = false; controller?.canvas.setNeedsDisplay() }
         let connected = GCController.controllers().first { $0.extendedGamepad != nil }
         let identity = connected.map { ObjectIdentifier($0) }
         if lastController != identity {
@@ -270,13 +303,33 @@ private final class MappingSession {
         }
         let viewport = canvas.viewport
         let shorter = Float(min(viewport.width, viewport.height))
+        if let cursor = profile.cursor, cursor.enabled {
+            let (x, y) = sticks[1]
+            let magnitude = hypotf(x, y)
+            if magnitude > profile.deadzone {
+                let speed = (min(1, magnitude) - profile.deadzone) / (1 - profile.deadzone)
+                    * cursor.speed * shorter * dt
+                cursorPoint.x = min(1, max(0, cursorPoint.x + CGFloat(x / magnitude * speed / Float(viewport.width))))
+                cursorPoint.y = min(1, max(0, cursorPoint.y + CGFloat(y / magnitude * speed / Float(viewport.height))))
+                canvas.setNeedsDisplay()
+            }
+        }
         var result: [[Float]] = []
         for binding in profile.bindings {
             if binding.control < 15 {
                 if buttons[binding.control] >= 0.25 {
-                    result.append([Float(binding.control), binding.x, binding.y, binding.x, binding.y])
+                    if binding.cursorClick == true {
+                        guard profile.cursor?.enabled == true else { continue }
+                        let x = Float(cursorPoint.x), y = Float(cursorPoint.y)
+                        result.append([Float(binding.control), x, y, x, y])
+                        cursorHeld = true
+                        canvas.setNeedsDisplay()
+                    } else {
+                        result.append([Float(binding.control), binding.x, binding.y, binding.x, binding.y])
+                    }
                 }
             } else {
+                if binding.control == 16 && profile.cursor?.enabled == true { continue }
                 let (x, y) = sticks[binding.control - 15]
                 let magnitude = hypotf(x, y)
                 guard magnitude > profile.deadzone else { continue }
@@ -318,6 +371,11 @@ private final class MappingViewController: UIViewController {
     let radiusLabel = UILabel()
     let deadzone = UISlider()
     let deadzoneLabel = UILabel()
+    let targetMode = UISegmentedControl(items: ["固定位置", "游标点击"])
+    let cursorEnabled = UISwitch()
+    let cursorLabel = UILabel()
+    let cursorSpeed = UISlider()
+    let cursorSpeedLabel = UILabel()
     let scroll = UIScrollView()
     let choices = UIStackView()
     var choiceButtons: [UIButton] = []
@@ -349,7 +407,7 @@ private final class MappingViewController: UIViewController {
         panel.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.96)
         panel.layer.cornerRadius = 16
         view.addSubview(panel)
-        for label in [title, connection, hint, selectedLabel, radiusLabel, deadzoneLabel] {
+        for label in [title, connection, hint, selectedLabel, radiusLabel, deadzoneLabel, cursorLabel, cursorSpeedLabel] {
             label.font = .systemFont(ofSize: 12)
             label.textColor = .label
             panel.addSubview(label)
@@ -380,12 +438,23 @@ private final class MappingViewController: UIViewController {
         deadzone.maximumValue = 0.5
         deadzone.addTarget(self, action: #selector(changeDeadzone), for: .valueChanged)
         panel.addSubview(deadzone)
+        panel.addSubview(targetMode)
+        targetMode.addTarget(self, action: #selector(changeTarget), for: .valueChanged)
+        cursorLabel.text = "右摇杆移动游标"
+        panel.addSubview(cursorEnabled)
+        cursorEnabled.addTarget(self, action: #selector(toggleCursor), for: .valueChanged)
+        cursorSpeed.minimumValue = 0.2
+        cursorSpeed.maximumValue = 2
+        cursorSpeed.addTarget(self, action: #selector(changeCursorSpeed), for: .valueChanged)
+        panel.addSubview(cursorSpeed)
         let actions = UIStackView()
         actions.axis = .horizontal
         actions.distribution = .fillEqually
         actions.spacing = 4
-        for (name, selector) in [("删除此键", #selector(removeSelected)),
-                                 ("取消", #selector(cancel)), ("保存", #selector(save))] {
+        var actionItems: [(String, Selector)] = [("删除此键", #selector(removeSelected))]
+        if session.isDeadSpace { actionItems.append(("推荐预设", #selector(applyPreset))) }
+        actionItems.append(contentsOf: [("取消", #selector(cancel)), ("保存", #selector(save))])
+        for (name, selector) in actionItems {
             let button = UIButton(type: .system)
             configure(button, name, action: selector)
             actions.addArrangedSubview(button)
@@ -408,7 +477,7 @@ private final class MappingViewController: UIViewController {
         open.frame = CGRect(x: safe.left + 12, y: safe.top + 8, width: 66, height: 36)
         let width = min(500, view.bounds.width - safe.left - safe.right - 16)
         // Dock the editor along the bottom; hide it to position a key underneath.
-        let height: CGFloat = 224
+        let height: CGFloat = 308
         panel.frame = CGRect(x: (view.bounds.width - width) / 2,
                              y: view.bounds.height - safe.bottom - height - 4,
                              width: width, height: height)
@@ -420,12 +489,17 @@ private final class MappingViewController: UIViewController {
         choices.frame = CGRect(origin: .zero, size: CGSize(width: choiceSize.width, height: 33))
         scroll.contentSize = choices.bounds.size
         selectedLabel.frame = CGRect(x: 10, y: 83, width: width - 20, height: 18)
-        radiusLabel.frame = CGRect(x: 10, y: 104, width: 90, height: 22)
-        radius.frame = CGRect(x: 95, y: 100, width: width - 105, height: 30)
-        deadzoneLabel.frame = CGRect(x: 10, y: 134, width: 90, height: 22)
-        deadzone.frame = CGRect(x: 95, y: 130, width: width - 105, height: 30)
-        hint.frame = CGRect(x: 10, y: 161, width: width - 20, height: 28)
-        panel.viewWithTag(100)?.frame = CGRect(x: 8, y: 190, width: width - 16, height: 30)
+        targetMode.frame = CGRect(x: 10, y: 103, width: width - 20, height: 27)
+        radiusLabel.frame = CGRect(x: 10, y: 134, width: 90, height: 22)
+        radius.frame = CGRect(x: 95, y: 130, width: width - 105, height: 30)
+        deadzoneLabel.frame = CGRect(x: 10, y: 164, width: 90, height: 22)
+        deadzone.frame = CGRect(x: 95, y: 160, width: width - 105, height: 30)
+        cursorLabel.frame = CGRect(x: 10, y: 192, width: width - 80, height: 25)
+        cursorEnabled.frame = CGRect(x: width - 62, y: 189, width: 51, height: 31)
+        cursorSpeedLabel.frame = CGRect(x: 10, y: 222, width: 90, height: 22)
+        cursorSpeed.frame = CGRect(x: 95, y: 218, width: width - 105, height: 30)
+        hint.frame = CGRect(x: 10, y: 249, width: width - 20, height: 28)
+        panel.viewWithTag(100)?.frame = CGRect(x: 8, y: 277, width: width - 16, height: 28)
         updateViewport()
     }
 
@@ -451,12 +525,18 @@ private final class MappingViewController: UIViewController {
         title.text = "\(session.gameName) · \(session.landscape ? "横屏" : "竖屏")映射"
         enabled.isOn = session.profile.enabled
         let binding = session.profile.bindings.first { $0.control == session.selected }
-        selectedLabel.text = "\(controlNames[session.selected])：\(binding == nil ? "点画面添加" : "拖动标记调整")"
+        selectedLabel.text = "\(controlNames[session.selected])：\(binding?.cursorClick == true ? "点击当前游标" : (binding == nil ? "点画面添加" : "拖动标记调整"))"
+        targetMode.isEnabled = session.selected < 15
+        targetMode.selectedSegmentIndex = binding?.cursorClick == true ? 1 : 0
         radius.isEnabled = session.selected >= 15 && binding != nil
         radius.value = binding?.radius ?? 0.12
         radiusLabel.text = "摇杆范围 \(Int(radius.value * 100))%"
         deadzone.value = session.profile.deadzone
         deadzoneLabel.text = "摇杆死区 \(Int(deadzone.value * 100))%"
+        cursorEnabled.isOn = session.profile.cursor?.enabled == true
+        cursorSpeed.isEnabled = cursorEnabled.isOn
+        cursorSpeed.value = session.profile.cursor?.speed ?? 0.8
+        cursorSpeedLabel.text = "游标速度 \(Int(cursorSpeed.value * 100))%"
         hint.text = session.status
         for button in choiceButtons {
             let mapped = session.profile.bindings.contains { $0.control == button.tag }
@@ -489,6 +569,38 @@ private final class MappingViewController: UIViewController {
     @objc func changeDeadzone() {
         var p = session.profile; p.deadzone = deadzone.value; session.profile = p; session.changed()
     }
+    @objc func changeTarget() {
+        guard session.selected < 15 else { return }
+        var p = session.profile
+        let cursorClick = targetMode.selectedSegmentIndex == 1
+        if cursorClick {
+            if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+                p.bindings[index].cursorClick = true
+            } else {
+                p.bindings.append(ScreenBinding(control: session.selected, x: 0.5, y: 0.5, cursorClick: true))
+            }
+            var cursor = p.cursor ?? ScreenCursor(); cursor.enabled = true; p.cursor = cursor
+            p.enabled = true
+        } else if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+            p.bindings[index].cursorClick = nil
+        }
+        session.profile = p; session.changed()
+    }
+    @objc func toggleCursor() {
+        var p = session.profile
+        var cursor = p.cursor ?? ScreenCursor(); cursor.enabled = cursorEnabled.isOn; p.cursor = cursor
+        session.profile = p; session.changed()
+    }
+    @objc func changeCursorSpeed() {
+        var p = session.profile
+        var cursor = p.cursor ?? ScreenCursor(); cursor.speed = cursorSpeed.value; p.cursor = cursor
+        session.profile = p; session.changed()
+    }
+    @objc func applyPreset() {
+        session.profile = MappingSession.deadSpaceProfile()
+        session.status = "左摇杆移动；右摇杆游标；R2/RT 点击或按住拖动"
+        session.changed()
+    }
     @objc func removeSelected() {
         var p = session.profile; p.bindings.removeAll { $0.control == session.selected }
         session.profile = p; session.changed()
@@ -505,11 +617,28 @@ private final class MappingCanvas: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func draw(_ rect: CGRect) {
-        guard let session = session, session.editing, let context = UIGraphicsGetCurrentContext() else { return }
+        guard let session = session, let context = UIGraphicsGetCurrentContext() else { return }
+        if session.profile.enabled && session.profile.cursor?.enabled == true {
+            let point = CGPoint(x: viewport.minX + session.cursorPoint.x * viewport.width,
+                                y: viewport.minY + session.cursorPoint.y * viewport.height)
+            let ring = CGRect(x: point.x - 9, y: point.y - 9, width: 18, height: 18)
+            context.setStrokeColor(UIColor.black.cgColor)
+            context.setLineWidth(4)
+            context.strokeEllipse(in: ring)
+            context.setStrokeColor((session.cursorHeld ? UIColor.systemGreen : UIColor.white).cgColor)
+            context.setLineWidth(2)
+            context.strokeEllipse(in: ring)
+            context.move(to: CGPoint(x: point.x - 4, y: point.y))
+            context.addLine(to: CGPoint(x: point.x + 4, y: point.y))
+            context.move(to: CGPoint(x: point.x, y: point.y - 4))
+            context.addLine(to: CGPoint(x: point.x, y: point.y + 4))
+            context.strokePath()
+        }
+        guard session.editing else { return }
         context.setStrokeColor(UIColor.systemBlue.withAlphaComponent(0.7).cgColor)
         context.setLineWidth(1)
         context.stroke(viewport)
-        for binding in session.profile.bindings {
+        for binding in session.profile.bindings where binding.cursorClick != true {
             let point = CGPoint(x: viewport.minX + CGFloat(binding.x) * viewport.width,
                                 y: viewport.minY + CGFloat(binding.y) * viewport.height)
             let selected = binding.control == session.selected
@@ -537,7 +666,7 @@ private final class MappingCanvas: UIView {
         guard let session = session, let touch = touches.first else { return }
         let point = touch.location(in: self)
         guard viewport.contains(point) else { return }
-        let nearest = session.profile.bindings.min {
+        let nearest = session.profile.bindings.filter { $0.cursorClick != true }.min {
             distance($0, point) < distance($1, point)
         }
         if let nearest = nearest, distance(nearest, point) < 27 {
