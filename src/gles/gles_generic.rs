@@ -403,6 +403,21 @@ pub trait GLES {
     unsafe fn Translatef(&mut self, x: GLfloat, y: GLfloat, z: GLfloat);
     unsafe fn Translatex(&mut self, x: GLfixed, y: GLfixed, z: GLfixed);
 
+    unsafe fn CurrentPaletteMatrixOES(&mut self, index: GLuint);
+    unsafe fn MatrixIndexPointerOES(
+        &mut self,
+        size: GLint,
+        type_: GLenum,
+        stride: GLsizei,
+        pointer: *const GLvoid,
+    );
+    unsafe fn WeightPointerOES(
+        &mut self,
+        size: GLint,
+        type_: GLenum,
+        stride: GLsizei,
+        pointer: *const GLvoid,
+    );
     // OES_framebuffer_object (incomplete)
     unsafe fn GenFramebuffersOES(&mut self, n: GLsizei, framebuffers: *mut GLuint);
     unsafe fn GenRenderbuffersOES(&mut self, n: GLsizei, renderbuffers: *mut GLuint);

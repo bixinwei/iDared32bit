@@ -37,6 +37,7 @@ use std::ffi::CStr;
 /// implementation limits. We might eventually need to check those rather than
 /// just providing the minimum.
 pub const CAPABILITIES: &[GLenum] = &[
+    gles11::MATRIX_PALETTE_OES,
     gl21::ALPHA_TEST,
     gl21::BLEND,
     gl21::COLOR_LOGIC_OP,
@@ -140,10 +141,40 @@ pub const ARRAYS: &[ArrayInfo] = &[
         stride: gl21::VERTEX_ARRAY_STRIDE,
         pointer: gl21::VERTEX_ARRAY_POINTER,
     },
+    ArrayInfo {
+        name: gles11::WEIGHT_ARRAY_OES,
+        buffer_binding: gles11::WEIGHT_ARRAY_BUFFER_BINDING_OES,
+        size: Some(gles11::WEIGHT_ARRAY_SIZE_OES),
+        stride: gles11::WEIGHT_ARRAY_STRIDE_OES,
+        pointer: gles11::WEIGHT_ARRAY_POINTER_OES,
+    },
+    ArrayInfo {
+        name: gles11::MATRIX_INDEX_ARRAY_OES,
+        buffer_binding: gles11::MATRIX_INDEX_ARRAY_BUFFER_BINDING_OES,
+        size: Some(gles11::MATRIX_INDEX_ARRAY_SIZE_OES),
+        stride: gles11::MATRIX_INDEX_ARRAY_STRIDE_OES,
+        pointer: gles11::MATRIX_INDEX_ARRAY_POINTER_OES,
+    },
 ];
 
 /// Table of `glGet` parameters shared by OpenGL ES 1.1 and OpenGL 2.1.
 const GET_PARAMS: ParamTable = ParamTable(&[
+    (gles11::MATRIX_PALETTE_OES, ParamType::Boolean, 1),
+    (gles11::CURRENT_PALETTE_MATRIX_OES, ParamType::Int, 1),
+    (gles11::WEIGHT_ARRAY_OES, ParamType::Boolean, 1),
+    (gles11::WEIGHT_ARRAY_BUFFER_BINDING_OES, ParamType::Int, 1),
+    (gles11::WEIGHT_ARRAY_SIZE_OES, ParamType::Int, 1),
+    (gles11::WEIGHT_ARRAY_STRIDE_OES, ParamType::Int, 1),
+    (gles11::WEIGHT_ARRAY_TYPE_OES, ParamType::Int, 1),
+    (gles11::MATRIX_INDEX_ARRAY_OES, ParamType::Boolean, 1),
+    (
+        gles11::MATRIX_INDEX_ARRAY_BUFFER_BINDING_OES,
+        ParamType::Int,
+        1,
+    ),
+    (gles11::MATRIX_INDEX_ARRAY_SIZE_OES, ParamType::Int, 1),
+    (gles11::MATRIX_INDEX_ARRAY_STRIDE_OES, ParamType::Int, 1),
+    (gles11::MATRIX_INDEX_ARRAY_TYPE_OES, ParamType::Int, 1),
     (gl21::ACTIVE_TEXTURE, ParamType::Int, 1),
     (gl21::ALIASED_POINT_SIZE_RANGE, ParamType::Float, 2),
     (gl21::ALIASED_LINE_WIDTH_RANGE, ParamType::Float, 2),
@@ -667,6 +698,9 @@ impl GLES1OnGL2<'_> {
             let buffer_ptr: *const GLfloat = buffer.as_ptr();
             let buffer_ptr: *const GLvoid = buffer_ptr.cast();
             match array_info.name {
+                gles11::WEIGHT_ARRAY_OES => {
+                    gl21::WeightPointerARB(size, gl21::FLOAT, 0, buffer_ptr)
+                }
                 gl21::COLOR_ARRAY => gl21::ColorPointer(size, gl21::FLOAT, 0, buffer_ptr),
                 gl21::NORMAL_ARRAY => {
                     assert!(size == 3);
@@ -706,6 +740,9 @@ impl GLES1OnGL2<'_> {
             }
 
             match array_info.name {
+                gles11::WEIGHT_ARRAY_OES => {
+                    gl21::WeightPointerARB(size.unwrap(), gl21::FLOAT, stride, pointer)
+                }
                 gl21::COLOR_ARRAY => {
                     gl21::ColorPointer(size.unwrap(), gl21::FLOAT, stride, pointer)
                 }
@@ -762,6 +799,9 @@ impl GLES for GLES1OnGL2<'_> {
         gl21::GetError()
     }
     unsafe fn Enable(&mut self, cap: GLenum) {
+        if cap == gles11::MATRIX_PALETTE_OES {
+            gl21::Enable(gl21::VERTEX_BLEND_ARB);
+        }
         if ARRAYS.iter().any(|&ArrayInfo { name, .. }| name == cap) {
             log_dbg!("Tolerating glEnable({:#x}) of client state", cap);
         } else if cap == gl21::PERSPECTIVE_CORRECTION_HINT
@@ -788,6 +828,9 @@ impl GLES for GLES1OnGL2<'_> {
         gl21::IsEnabled(cap)
     }
     unsafe fn Disable(&mut self, cap: GLenum) {
+        if cap == gles11::MATRIX_PALETTE_OES {
+            gl21::Disable(gl21::VERTEX_BLEND_ARB);
+        }
         if CAPABILITIES.contains(&cap) {
             log_dbg!("glDisable{:#x}", cap);
         } else if ARRAYS.iter().any(|&ArrayInfo { name, .. }| name == cap) {
@@ -2119,7 +2162,12 @@ impl GLES for GLES1OnGL2<'_> {
         if mode == gl21::MODELVIEW_MATRIX {
             log_dbg!("Tolerating glMatrixMode({:#x}) of unsupported mode", mode);
         } else {
-            assert!(mode == gl21::MODELVIEW || mode == gl21::PROJECTION || mode == gl21::TEXTURE);
+            assert!(
+                mode == gl21::MODELVIEW
+                    || mode == gl21::PROJECTION
+                    || mode == gl21::TEXTURE
+                    || mode == gles11::MATRIX_PALETTE_OES
+            );
         }
         gl21::MatrixMode(mode);
     }
@@ -2243,6 +2291,39 @@ impl GLES for GLES1OnGL2<'_> {
     }
 
     // OES_framebuffer_object -> EXT_framebuffer_object
+    unsafe fn CurrentPaletteMatrixOES(&mut self, index: GLuint) {
+        gl21::CurrentPaletteMatrixARB(index)
+    }
+    unsafe fn MatrixIndexPointerOES(
+        &mut self,
+        size: GLint,
+        type_: GLenum,
+        stride: GLsizei,
+        pointer: *const GLvoid,
+    ) {
+        gl21::MatrixIndexPointerARB(size, type_, stride, pointer)
+    }
+    unsafe fn WeightPointerOES(
+        &mut self,
+        size: GLint,
+        type_: GLenum,
+        stride: GLsizei,
+        pointer: *const GLvoid,
+    ) {
+        gl21::VertexBlendARB(size);
+        let i = ARRAYS
+            .iter()
+            .position(|a| a.name == gles11::WEIGHT_ARRAY_OES)
+            .unwrap();
+        let type_ = if type_ == gles11::FIXED {
+            self.state.pointer_translated_from[i] = Some(type_);
+            gl21::FLOAT
+        } else {
+            self.state.pointer_translated_from[i] = None;
+            type_
+        };
+        gl21::WeightPointerARB(size, type_, stride, pointer)
+    }
     unsafe fn GenFramebuffersOES(&mut self, n: GLsizei, framebuffers: *mut GLuint) {
         gl21::GenFramebuffersEXT(n, framebuffers)
     }
