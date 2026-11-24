@@ -473,7 +473,7 @@ impl GLESContext for GLES1OnGL2Context {
                 pending_error: None,
                 pointer_translated_from: [None; ARRAYS.len()],
                 translated_texture_units: HashMap::new(),
-                fixed_point_translation_buffers: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+                fixed_point_translation_buffers: std::array::from_fn(|_| Vec::new()),
                 point_size_array_enabled: false,
             },
             is_loaded: false,
@@ -2292,7 +2292,7 @@ impl GLES for GLES1OnGL2<'_> {
 
     // OES_framebuffer_object -> EXT_framebuffer_object
     unsafe fn CurrentPaletteMatrixOES(&mut self, index: GLuint) {
-        gl21::CurrentPaletteMatrixARB(index)
+        gl21::CurrentPaletteMatrixARB(index as GLint)
     }
     unsafe fn MatrixIndexPointerOES(
         &mut self,
