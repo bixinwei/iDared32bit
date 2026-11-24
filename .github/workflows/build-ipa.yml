@@ -64,6 +64,12 @@ jobs:
           print('Selecting', app, flush=True)
           subprocess.run(['sudo', 'xcode-select', '--switch', app + '/Contents/Developer'], check=True)
           PY
+      - name: Check native controller mapper
+        run: |
+          set -o pipefail
+          swiftc -typecheck -swift-version 5 -target arm64-apple-ios16.0 \
+            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            iphone/iDared32bit/ControllerMapping.swift 2>&1 | tee -a build.log
       - name: Install Rust iOS target
         run: |
           rustup toolchain install stable --profile minimal
@@ -86,6 +92,7 @@ jobs:
           cargo test --locked --lib audio_unit_format_tests
           cargo test --locked --lib framebuffer_export_tests
           cargo test --locked --lib cjk_font_tests
+          cargo test --locked --lib controller_mapping_tests
       - name: Build device app without signing
         run: |
           set -o pipefail
@@ -100,7 +107,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' \
             PRODUCT_BUNDLE_IDENTIFIER=com.bixinwei.idared32bit \
-            CURRENT_PROJECT_VERSION=7 \
+            CURRENT_PROJECT_VERSION=8 \
             ENABLE_USER_SCRIPT_SANDBOXING=NO \
             2>&1 | tee -a build.log
       - name: Package and verify IPA

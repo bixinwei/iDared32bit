@@ -138,6 +138,7 @@ pub enum FingerId {
     ButtonToTouch(crate::options::Button),
     StickToTouch,
     DpadToTouch,
+    ScreenMapping(u8),
 }
 pub type Coords = (f32, f32);
 
@@ -286,6 +287,13 @@ pub struct Window {
     /// When a game controller's Back button was pressed, if it's still held
     /// and hasn't yet been held long enough to return to the app picker.
     controller_back_held_since: Option<Instant>,
+    mapping_capture: bool,
+    mapping_editing: bool,
+    input_touches: HashMap<FingerId, Coords>,
+    #[cfg(target_os = "ios")]
+    mapping_game: Option<(std::ffi::CString, std::ffi::CString)>,
+    #[cfg(target_os = "ios")]
+    mapping_touches: crate::controller_mapping::TouchState,
     /// Whether to show the on-screen Home button, see
     /// [Self::enable_on_screen_home_button].
     on_screen_home_button: bool,
@@ -468,6 +476,13 @@ impl Window {
             virtual_cursor_last_unsticky: None,
             virtual_accelerometer_last: None,
             controller_back_held_since: None,
+            mapping_capture: false,
+            mapping_editing: false,
+            input_touches: HashMap::new(),
+            #[cfg(target_os = "ios")]
+            mapping_game: None,
+            #[cfg(target_os = "ios")]
+            mapping_touches: Default::default(),
             on_screen_home_button: false,
             home_button_press: None,
             on_main_stack: true,
@@ -506,6 +521,9 @@ impl Window {
             return;
         }
         self.last_polled = now;
+
+        #[cfg(target_os = "ios")]
+        self.poll_controller_mapping();
 
         fn transform_input_coords(
             window: &Window,
@@ -615,7 +633,7 @@ impl Window {
                 _ => {}
             }
 
-            self.event_queue.push_back(match event {
+            let input_event = match event {
                 E::Quit { .. } => Event::Quit,
                 E::MouseButtonDown {
                     x,
@@ -660,6 +678,9 @@ impl Window {
                     if button == sdl2::controller::Button::Back {
                         self.controller_back_held_since =
                             matches!(event, E::ControllerButtonDown { .. }).then(Instant::now);
+                        continue;
+                    }
+                    if self.mapping_capture {
                         continue;
                     }
                     let Some(button) = translate_button(button) else {
@@ -755,6 +776,9 @@ impl Window {
                 }
                 E::ControllerAxisMotion { axis, .. } => {
                     controller_updated = true;
+                    if self.mapping_capture {
+                        continue;
+                    }
                     let Some((x, y, w, h)) = options.stick_to_touch else {
                         continue;
                     };
@@ -961,7 +985,16 @@ impl Window {
                     Event::TextInput(TextInputEvent::Text(text))
                 }
                 _ => continue,
-            })
+            };
+            if self.mapping_editing
+                && matches!(
+                    input_event,
+                    Event::TouchesDown(_) | Event::TouchesMove(_) | Event::TouchesUp(_)
+                )
+            {
+                continue;
+            }
+            self.queue_input_event(input_event);
         }
 
         if let Some(press) = &mut self.home_button_press {
@@ -981,25 +1014,137 @@ impl Window {
             }
         }
 
-        if controller_updated {
+        if controller_updated && !self.mapping_capture {
             let (new_x, new_y, pressed, pressed_changed, moved) =
                 self.update_virtual_cursor(options);
-            self.event_queue
-                .push_back(match (pressed, pressed_changed, moved) {
-                    (true, true, _) => {
-                        let coords = transform_input_coords(self, (new_x, new_y), false);
-                        Event::TouchesDown(HashMap::from([(FingerId::VirtualCursor, coords)]))
-                    }
-                    (false, true, _) => {
-                        let coords = transform_input_coords(self, (new_x, new_y), false);
-                        Event::TouchesUp(HashMap::from([(FingerId::VirtualCursor, coords)]))
-                    }
-                    (true, _, true) => {
-                        let coords = transform_input_coords(self, (new_x, new_y), false);
-                        Event::TouchesMove(HashMap::from([(FingerId::VirtualCursor, coords)]))
-                    }
-                    _ => return,
-                });
+            self.queue_input_event(match (pressed, pressed_changed, moved) {
+                (true, true, _) => {
+                    let coords = transform_input_coords(self, (new_x, new_y), false);
+                    Event::TouchesDown(HashMap::from([(FingerId::VirtualCursor, coords)]))
+                }
+                (false, true, _) => {
+                    let coords = transform_input_coords(self, (new_x, new_y), false);
+                    Event::TouchesUp(HashMap::from([(FingerId::VirtualCursor, coords)]))
+                }
+                (true, _, true) => {
+                    let coords = transform_input_coords(self, (new_x, new_y), false);
+                    Event::TouchesMove(HashMap::from([(FingerId::VirtualCursor, coords)]))
+                }
+                _ => return,
+            });
+        }
+    }
+
+    fn queue_input_event(&mut self, event: Event) {
+        match &event {
+            Event::TouchesDown(map) | Event::TouchesMove(map) => {
+                self.input_touches
+                    .extend(map.iter().map(|(&id, &point)| (id, point)));
+            }
+            Event::TouchesUp(map) => {
+                for id in map.keys() {
+                    self.input_touches.remove(id);
+                }
+            }
+            _ => {}
+        }
+        self.event_queue.push_back(event);
+    }
+
+    pub fn set_controller_mapping_game(&mut self, id: &str, name: &str) {
+        #[cfg(target_os = "ios")]
+        {
+            use std::ffi::CString;
+            if let (Ok(id), Ok(name)) = (CString::new(id), CString::new(name)) {
+                self.mapping_game = Some((id, name));
+            }
+        }
+        #[cfg(not(target_os = "ios"))]
+        let _ = (id, name);
+    }
+
+    #[cfg(target_os = "ios")]
+    fn poll_controller_mapping(&mut self) {
+        use crate::controller_mapping::{native, Change};
+        let Some(game) = &self.mapping_game else {
+            return;
+        };
+        let (vx, vy, vw, vh) = self.viewport();
+        let (width, height) = self.window.drawable_size();
+        if width == 0 || height == 0 {
+            return;
+        }
+        let landscape = matches!(
+            self.device_orientation,
+            DeviceOrientation::LandscapeLeft | DeviceOrientation::LandscapeRight
+        );
+        let mut snapshot = native::poll(
+            game,
+            (
+                vx as f32 / width as f32,
+                vy as f32 / height as f32,
+                vw as f32 / width as f32,
+                vh as f32 / height as f32,
+            ),
+            landscape,
+        );
+
+        // End pre-existing legacy controller presses on entering mapping mode.
+        // Entering the editor also ends physical touches; its canvas owns input.
+        if (!self.mapping_capture && snapshot.capture)
+            || (!self.mapping_editing && snapshot.editing)
+        {
+            let releases: HashMap<_, _> = self
+                .input_touches
+                .iter()
+                .filter(|(id, _)| match id {
+                    FingerId::ScreenMapping(_) => false,
+                    FingerId::Touch(_) | FingerId::Mouse => snapshot.editing,
+                    _ => true,
+                })
+                .map(|(&id, &point)| (id, point))
+                .collect();
+            if !releases.is_empty() {
+                self.queue_input_event(Event::TouchesUp(releases));
+            }
+            self.virtual_cursor_last = None;
+            self.virtual_cursor_last_unsticky = None;
+            self.stick_active = false;
+            self.dpad_state = DpadState {
+                left: false,
+                right: false,
+                up: false,
+                down: false,
+                active: false,
+            };
+        }
+        self.mapping_capture = snapshot.capture;
+        self.mapping_editing = snapshot.editing;
+        let matrix = self.rotation_matrix().inverse().unwrap();
+        let guest_size = self.size_unrotated_unscaled();
+        let transform = |point: (f32, f32)| {
+            crate::controller_mapping::guest_point(point, guest_size, *matrix.columns())
+        };
+        for contact in &mut snapshot.contacts {
+            contact.point = transform(contact.point);
+            contact.anchor = transform(contact.anchor);
+        }
+        for change in self
+            .mapping_touches
+            .update(snapshot.revision, &snapshot.contacts)
+        {
+            let event = match change {
+                Change::Down(id, point) => {
+                    Event::TouchesDown(HashMap::from([(FingerId::ScreenMapping(id), point)]))
+                }
+                Change::Move(id, point) => {
+                    Event::TouchesMove(HashMap::from([(FingerId::ScreenMapping(id), point)]))
+                }
+                Change::Up(id, point) => {
+                    Event::TouchesUp(HashMap::from([(FingerId::ScreenMapping(id), point)]))
+                }
+            };
+            self.queue_input_event(event);
         }
     }
 
@@ -1230,7 +1375,10 @@ impl Window {
     /// Get the real or simulated accelerometer output.
     /// See also [crate::frameworks::uikit::ui_accelerometer].
     pub fn get_acceleration(&self, options: &Options) -> (f32, f32, f32) {
-        if self.controllers.is_empty() || !options.analog_stick_tilt_controls {
+        if self.controllers.is_empty()
+            || self.mapping_capture
+            || !options.analog_stick_tilt_controls
+        {
             if let Some(ref accelerometer) = self.accelerometer {
                 let data = accelerometer.get_data().unwrap();
                 let sdl2::sensor::SensorData::Accel(data) = data else {
@@ -1258,7 +1406,11 @@ impl Window {
         } else {
             // Get left analog stick input. The range is [-1, 1] on each axis.
             let (x, y, _) = self.get_controller_stick(options, true);
-            (x, y)
+            if self.mapping_capture {
+                (0.0, 0.0)
+            } else {
+                (x, y)
+            }
         };
 
         // Correct for window rotation
@@ -1296,6 +1448,9 @@ impl Window {
     /// the viewport, and press state of the analog stick-controlled virtual
     /// cursor, if it is visible.
     pub fn virtual_cursor_visible_at(&self) -> Option<(f32, f32, bool)> {
+        if self.mapping_capture {
+            return None;
+        }
         let (x, y, pressed, visible) = self.virtual_cursor_last?;
         let (vx, vy, _, _) = self.viewport();
         let (vx, vy) = (vx as f32, vy as f32);

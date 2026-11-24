@@ -30,6 +30,7 @@ mod log;
 mod abi;
 mod audio;
 mod bundle;
+mod controller_mapping;
 mod cpu;
 mod debug;
 mod dyld;

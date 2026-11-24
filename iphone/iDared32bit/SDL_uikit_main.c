@@ -32,6 +32,13 @@ extern void idared_set_movie_player(
     void (*)(const char *, bool, int32_t, bool), bool (*)(void),
     void (*)(void), double (*)(void), void (*)(double));
 
+typedef size_t (*idared_mapper_fn)(const char *, const char *, float, float, float, float,
+                                  bool, float *, size_t);
+extern size_t idared_controller_mapper_poll(const char *, const char *, float, float,
+                                          float, float, bool, float *, size_t);
+extern void idared_controller_mapper_stop(void);
+extern void idared_set_controller_mapper(idared_mapper_fn, void (*)(void));
+
 int
 main(int argc, char *argv[])
 {
@@ -40,6 +47,7 @@ main(int argc, char *argv[])
     idared_set_movie_player(idared_movie_play, idared_movie_finished,
                             idared_movie_stop, idared_movie_time,
                             idared_movie_seek);
+    idared_set_controller_mapper(idared_controller_mapper_poll, idared_controller_mapper_stop);
     return SDL_UIKitRunApp(argc, argv, SDL_main);
 }
 #endif /* !SDL_MAIN_HANDLED */

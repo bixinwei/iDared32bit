@@ -749,6 +749,10 @@ impl Environment {
         // picker doesn't.
         if let Some(window) = env.window.as_mut() {
             window.enable_on_screen_home_button();
+            window.set_controller_mapping_game(
+                env.bundle.bundle_identifier(),
+                env.bundle.display_name(),
+            );
         }
 
         if env.options.dumping_options.any() {
@@ -2176,6 +2180,8 @@ impl Drop for Environment {
             return;
         }
         if let Some(w) = self.window.as_mut() {
+            #[cfg(target_os = "ios")]
+            crate::controller_mapping::native::stop();
             w.on_main_stack = false;
             // A game's keyboard mustn't stay up over the app picker.
             w.stop_text_input_on_exit();
