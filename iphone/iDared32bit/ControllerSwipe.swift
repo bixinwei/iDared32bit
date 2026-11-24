@@ -29,7 +29,7 @@ struct ControllerSwipeTracker {
         }
         if cooldown > 0 {
             cooldown = max(0, cooldown - elapsed)
-            return nil
+            if cooldown > 0 { return nil }
         }
         if releaseNext {
             point = nil
