@@ -1239,37 +1239,6 @@ fn glMultiTexCoord4x(
 }
 
 // OES_framebuffer_object
-fn glCurrentPaletteMatrixOES(env: &mut Environment, index: GLuint) {
-    with_ctx_and_mem(env, |gles, _mem| unsafe {
-        gles.CurrentPaletteMatrixOES(index)
-    })
-}
-fn glMatrixIndexPointerOES(
-    env: &mut Environment,
-    size: GLint,
-    type_: GLenum,
-    stride: GLsizei,
-    pointer: ConstVoidPtr,
-) {
-    with_ctx_and_mem(env, |gles, mem| unsafe {
-        let pointer =
-            translate_pointer_or_offset_to_host(gles, mem, pointer, gles11::ARRAY_BUFFER_BINDING);
-        gles.MatrixIndexPointerOES(size, type_, stride, pointer)
-    })
-}
-fn glWeightPointerOES(
-    env: &mut Environment,
-    size: GLint,
-    type_: GLenum,
-    stride: GLsizei,
-    pointer: ConstVoidPtr,
-) {
-    with_ctx_and_mem(env, |gles, mem| unsafe {
-        let pointer =
-            translate_pointer_or_offset_to_host(gles, mem, pointer, gles11::ARRAY_BUFFER_BINDING);
-        gles.WeightPointerOES(size, type_, stride, pointer)
-    })
-}
 fn glGenFramebuffersOES(env: &mut Environment, n: GLsizei, framebuffers: MutPtr<GLuint>) {
     with_ctx_and_mem(env, |gles, mem| {
         let n_usize: GuestUSize = n.try_into().unwrap();
@@ -1735,9 +1704,6 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func_aliased!("glDeleteFramebuffers", glDeleteFramebuffersOES(_, _)),
     export_c_func_aliased!("glDeleteRenderbuffers", glDeleteRenderbuffersOES(_, _)),
     export_c_func_aliased!("glGenerateMipmap", glGenerateMipmapOES(_)),
-    export_c_func!(glCurrentPaletteMatrixOES(_)),
-    export_c_func!(glMatrixIndexPointerOES(_, _, _, _)),
-    export_c_func!(glWeightPointerOES(_, _, _, _)),
     export_c_func!(glGenFramebuffersOES(_, _)),
     export_c_func!(glGenRenderbuffersOES(_, _)),
     export_c_func!(glIsFramebufferOES(_)),
@@ -1813,3 +1779,4 @@ fn _get_buffer_size(env: &mut Environment, target: GLenum) -> GLint {
         buffer_size
     })
 }
+
