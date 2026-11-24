@@ -602,6 +602,57 @@ impl GLES for GLES1Native<'_> {
             data.as_ptr() as *const _,
         );
     }
+    unsafe fn CompressedTexSubImage2D(
+        &mut self,
+        target: GLenum,
+        level: GLint,
+        xoffset: GLint,
+        yoffset: GLint,
+        width: GLsizei,
+        height: GLsizei,
+        format: GLenum,
+        image_size: GLsizei,
+        data: *const GLvoid,
+    ) {
+        let bytes = std::slice::from_raw_parts(data.cast::<u8>(), image_size.try_into().unwrap());
+        let is_2bit =
+            match format {
+                gles11::COMPRESSED_RGB_PVRTC_4BPPV1_IMG
+                | gles11::COMPRESSED_RGBA_PVRTC_4BPPV1_IMG => Some(false),
+                gles11::COMPRESSED_RGB_PVRTC_2BPPV1_IMG
+                | gles11::COMPRESSED_RGBA_PVRTC_2BPPV1_IMG => Some(true),
+                _ => None,
+            };
+        let native_pvrtc = is_2bit.is_some()
+            && CStr::from_ptr(gles11::GetString(gles11::EXTENSIONS).cast())
+                .to_str()
+                .unwrap()
+                .contains("GL_IMG_texture_compression_pvrtc");
+        if let Some(is_2bit) = is_2bit.filter(|_| !native_pvrtc) {
+            // Decode the updated region, matching the TexImage2D fallback's RGBA storage.
+            let pixels = crate::image::decode_pvrtc(
+                bytes,
+                is_2bit,
+                width.try_into().unwrap(),
+                height.try_into().unwrap(),
+            );
+            self.TexSubImage2D(
+                target,
+                level,
+                xoffset,
+                yoffset,
+                width,
+                height,
+                gles11::RGBA,
+                gles11::UNSIGNED_BYTE,
+                pixels.as_ptr().cast(),
+            );
+        } else {
+            gles11::CompressedTexSubImage2D(
+                target, level, xoffset, yoffset, width, height, format, image_size, data,
+            );
+        }
+    }
     unsafe fn CopyTexImage2D(
         &mut self,
         target: GLenum,
@@ -796,6 +847,19 @@ impl GLES for GLES1Native<'_> {
         height: GLsizei,
     ) {
         gles11::RenderbufferStorageOES(target, internalformat, width, height)
+    }
+    unsafe fn RenderbufferStorageMultisampleAPPLE(
+        &mut self,
+        target: GLenum,
+        samples: GLsizei,
+        internalformat: GLenum,
+        width: GLsizei,
+        height: GLsizei,
+    ) {
+        gles11::RenderbufferStorageMultisampleAPPLE(target, samples, internalformat, width, height)
+    }
+    unsafe fn ResolveMultisampleFramebufferAPPLE(&mut self) {
+        gles11::ResolveMultisampleFramebufferAPPLE()
     }
     unsafe fn FramebufferRenderbufferOES(
         &mut self,

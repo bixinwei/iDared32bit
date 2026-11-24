@@ -18,6 +18,8 @@ fn main() {
         Fallbacks::None,
         [
             "GL_EXT_framebuffer_object",
+            "GL_EXT_framebuffer_multisample",
+            "GL_EXT_framebuffer_blit",
             "GL_EXT_texture_filter_anisotropic",
             "GL_EXT_texture_lod_bias",
             "GL_ARB_matrix_palette",
@@ -36,6 +38,7 @@ fn main() {
         Fallbacks::None,
         [
             "GL_OES_framebuffer_object",
+            "GL_APPLE_framebuffer_multisample",
             "GL_OES_rgb8_rgba8",
             "GL_EXT_texture_filter_anisotropic",
             "GL_IMG_texture_compression_pvrtc",

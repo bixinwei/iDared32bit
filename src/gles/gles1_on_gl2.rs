@@ -292,6 +292,8 @@ const GET_PARAMS: ParamTable = ParamTable(&[
     (gl21::VERTEX_ARRAY_TYPE, ParamType::Int, 1),
     // OES_framebuffer_object -> EXT_framebuffer_object
     (gl21::FRAMEBUFFER_BINDING_EXT, ParamType::Int, 1),
+    (gl21::READ_FRAMEBUFFER_BINDING_EXT, ParamType::Int, 1),
+    (gl21::MAX_SAMPLES_EXT, ParamType::Int, 1),
     (gl21::MAX_RENDERBUFFER_SIZE_EXT, ParamType::Int, 1),
     (gl21::RENDERBUFFER_BINDING_EXT, ParamType::Int, 1),
     // EXT_texture_lod_bias
@@ -1859,6 +1861,52 @@ impl GLES for GLES1OnGL2<'_> {
             unimplemented!("CompressedTexImage2D internalformat: {:#x}", internalformat);
         }
     }
+    unsafe fn CompressedTexSubImage2D(
+        &mut self,
+        target: GLenum,
+        level: GLint,
+        xoffset: GLint,
+        yoffset: GLint,
+        width: GLsizei,
+        height: GLsizei,
+        format: GLenum,
+        image_size: GLsizei,
+        data: *const GLvoid,
+    ) {
+        let bytes = std::slice::from_raw_parts(data.cast::<u8>(), image_size.try_into().unwrap());
+        let is_2bit =
+            match format {
+                gles11::COMPRESSED_RGB_PVRTC_4BPPV1_IMG
+                | gles11::COMPRESSED_RGBA_PVRTC_4BPPV1_IMG => Some(false),
+                gles11::COMPRESSED_RGB_PVRTC_2BPPV1_IMG
+                | gles11::COMPRESSED_RGBA_PVRTC_2BPPV1_IMG => Some(true),
+                _ => None,
+            };
+        if let Some(is_2bit) = is_2bit {
+            // Decode the updated region, matching the TexImage2D fallback's RGBA storage.
+            let pixels = crate::image::decode_pvrtc(
+                bytes,
+                is_2bit,
+                width.try_into().unwrap(),
+                height.try_into().unwrap(),
+            );
+            self.TexSubImage2D(
+                target,
+                level,
+                xoffset,
+                yoffset,
+                width,
+                height,
+                gles11::RGBA,
+                gles11::UNSIGNED_BYTE,
+                pixels.as_ptr().cast(),
+            );
+        } else {
+            gl21::CompressedTexSubImage2D(
+                target, level, xoffset, yoffset, width, height, format, image_size, data,
+            );
+        }
+    }
     unsafe fn CopyTexImage2D(
         &mut self,
         target: GLenum,
@@ -2221,6 +2269,59 @@ impl GLES for GLES1OnGL2<'_> {
         height: GLsizei,
     ) {
         gl21::RenderbufferStorageEXT(target, internalformat, width, height)
+    }
+    unsafe fn RenderbufferStorageMultisampleAPPLE(
+        &mut self,
+        target: GLenum,
+        samples: GLsizei,
+        internalformat: GLenum,
+        width: GLsizei,
+        height: GLsizei,
+    ) {
+        gl21::RenderbufferStorageMultisampleEXT(target, samples, internalformat, width, height)
+    }
+    unsafe fn ResolveMultisampleFramebufferAPPLE(&mut self) {
+        // APPLE resolves color from the read FBO into the draw FBO. Its multisample
+        // source attachment is a renderbuffer; query its full size independently of the viewport.
+        let mut previous = 0;
+        let mut source = 0;
+        gl21::GetIntegerv(gl21::RENDERBUFFER_BINDING_EXT, &mut previous);
+        gl21::GetFramebufferAttachmentParameterivEXT(
+            gl21::READ_FRAMEBUFFER_EXT,
+            gl21::COLOR_ATTACHMENT0_EXT,
+            gl21::FRAMEBUFFER_ATTACHMENT_OBJECT_NAME_EXT,
+            &mut source,
+        );
+        gl21::BindRenderbufferEXT(gl21::RENDERBUFFER_EXT, source as GLuint);
+        let (mut width, mut height) = (0, 0);
+        gl21::GetRenderbufferParameterivEXT(
+            gl21::RENDERBUFFER_EXT,
+            gl21::RENDERBUFFER_WIDTH_EXT,
+            &mut width,
+        );
+        gl21::GetRenderbufferParameterivEXT(
+            gl21::RENDERBUFFER_EXT,
+            gl21::RENDERBUFFER_HEIGHT_EXT,
+            &mut height,
+        );
+        gl21::BindRenderbufferEXT(gl21::RENDERBUFFER_EXT, previous as GLuint);
+        let scissor = gl21::IsEnabled(gl21::SCISSOR_TEST) != 0;
+        gl21::Disable(gl21::SCISSOR_TEST);
+        gl21::BlitFramebufferEXT(
+            0,
+            0,
+            width,
+            height,
+            0,
+            0,
+            width,
+            height,
+            gl21::COLOR_BUFFER_BIT,
+            gl21::NEAREST,
+        );
+        if scissor {
+            gl21::Enable(gl21::SCISSOR_TEST);
+        }
     }
     unsafe fn FramebufferRenderbufferOES(
         &mut self,

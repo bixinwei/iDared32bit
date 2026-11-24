@@ -293,6 +293,18 @@ pub trait GLES {
         image_size: GLsizei,
         data: *const GLvoid,
     );
+    unsafe fn CompressedTexSubImage2D(
+        &mut self,
+        target: GLenum,
+        level: GLint,
+        xoffset: GLint,
+        yoffset: GLint,
+        width: GLsizei,
+        height: GLsizei,
+        format: GLenum,
+        image_size: GLsizei,
+        data: *const GLvoid,
+    );
     unsafe fn CopyTexImage2D(
         &mut self,
         target: GLenum,
@@ -405,6 +417,15 @@ pub trait GLES {
         width: GLsizei,
         height: GLsizei,
     );
+    unsafe fn RenderbufferStorageMultisampleAPPLE(
+        &mut self,
+        target: GLenum,
+        samples: GLsizei,
+        internalformat: GLenum,
+        width: GLsizei,
+        height: GLsizei,
+    );
+    unsafe fn ResolveMultisampleFramebufferAPPLE(&mut self);
     unsafe fn FramebufferRenderbufferOES(
         &mut self,
         target: GLenum,

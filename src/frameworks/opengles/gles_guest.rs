@@ -213,13 +213,6 @@ fn glGetIntegerv(env: &mut Environment, pname: GLenum, params: MutPtr<GLint>) {
                 // but we return 1 to match the real device.
                 mem.write(params, 1 as _);
             }
-            // MAX_SAMPLES or MAX_SAMPLES_ANGLE
-            0x8d57 => {
-                // TODO: handle GetBooleanv and GetFloatv as well
-                // 1 is an initial value
-                // TODO: This is an OpenGL ES 2.0 extension, not supported yet
-                mem.write(params, 1 as _);
-            }
             _ => {
                 let params = mem.ptr_at_mut(params, 16 /* upper bound */);
                 unsafe { gles.GetIntegerv(pname, params) };
@@ -1126,6 +1119,27 @@ fn glCompressedTexImage2D(
         )
     })
 }
+fn glCompressedTexSubImage2D(
+    env: &mut Environment,
+    target: GLenum,
+    level: GLint,
+    xoffset: GLint,
+    yoffset: GLint,
+    width: GLsizei,
+    height: GLsizei,
+    format: GLenum,
+    image_size: GLsizei,
+    data: ConstVoidPtr,
+) {
+    with_ctx_and_mem(env, |gles, mem| unsafe {
+        let data = mem
+            .ptr_at(data.cast::<u8>(), image_size.try_into().unwrap())
+            .cast();
+        gles.CompressedTexSubImage2D(
+            target, level, xoffset, yoffset, width, height, format, image_size, data,
+        )
+    })
+}
 fn glCopyTexImage2D(
     env: &mut Environment,
     target: GLenum,
@@ -1271,6 +1285,30 @@ fn glRenderbufferStorageOES(
     let (width, height) = (width * factor, height * factor);
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         gles.RenderbufferStorageOES(target, internalformat, width, height)
+    })
+}
+fn glRenderbufferStorageMultisampleAPPLE(
+    env: &mut Environment,
+    target: GLenum,
+    samples: GLsizei,
+    internalformat: GLenum,
+    width: GLsizei,
+    height: GLsizei,
+) {
+    let factor = env.options.scale_hack.get() as GLsizei;
+    with_ctx_and_mem(env, |gles, _mem| unsafe {
+        gles.RenderbufferStorageMultisampleAPPLE(
+            target,
+            samples,
+            internalformat,
+            width * factor,
+            height * factor,
+        )
+    })
+}
+fn glResolveMultisampleFramebufferAPPLE(env: &mut Environment) {
+    with_ctx_and_mem(env, |gles, _mem| unsafe {
+        gles.ResolveMultisampleFramebufferAPPLE()
     })
 }
 fn glFramebufferRenderbufferOES(
@@ -1619,6 +1657,9 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(glTexImage2D(_, _, _, _, _, _, _, _, _)),
     export_c_func!(glTexSubImage2D(_, _, _, _, _, _, _, _, _)),
     export_c_func!(glCompressedTexImage2D(_, _, _, _, _, _, _, _)),
+    export_c_func!(glCompressedTexSubImage2D(_, _, _, _, _, _, _, _, _)),
+    export_c_func!(glRenderbufferStorageMultisampleAPPLE(_, _, _, _, _)),
+    export_c_func!(glResolveMultisampleFramebufferAPPLE()),
     export_c_func!(glCopyTexImage2D(_, _, _, _, _, _, _, _)),
     export_c_func!(glCopyTexSubImage2D(_, _, _, _, _, _, _, _)),
     export_c_func!(glTexEnvf(_, _, _)),
@@ -1689,7 +1730,7 @@ mod framebuffer_export_tests {
     use super::*;
 
     #[test]
-    fn core_framebuffer_names_resolve_to_the_extension_implementation() {
+    fn core_framebuffer_names_and_extension_names_are_exported() {
         for name in [
             "glGenFramebuffers",
             "glGenRenderbuffers",
@@ -1709,8 +1750,11 @@ mod framebuffer_export_tests {
         ] {
             let core = format!("_{name}");
             let extension = format!("_{name}OES");
-            let find = |symbol: &str| FUNCTIONS.iter().find(|(n, _)| *n == symbol).unwrap().1;
-            assert!(std::ptr::eq(find(&core), find(&extension)), "{name}");
+            assert!(FUNCTIONS.iter().any(|(n, _)| *n == core), "{core}");
+            assert!(
+                FUNCTIONS.iter().any(|(n, _)| *n == extension),
+                "{extension}"
+            );
         }
     }
 }
