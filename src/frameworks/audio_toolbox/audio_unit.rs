@@ -316,6 +316,42 @@ fn AudioOutputUnitStop(env: &mut Environment, ci: AudioUnit) -> OSStatus {
 }
 
 pub fn render_audio_unit(env: &mut Environment, audio_unit: AudioUnit) {
+    if env.bundle.bundle_identifier() == "jp.co.capcom.res4" {
+        // RE4 renders sound effects on the same emulated run loop as its 3D
+        // frames. Producing only the elapsed wall time (capped at 2048 frames)
+        // leaves no reserve for a slow frame and repeatedly starves SDL.
+        // Keep 100 ms ahead, using bounded slices rather than one large guest
+        // callback. Other games retain their existing callback cadence.
+        for _ in 0..12 {
+            let state = &mut env.framework_state.audio_toolbox;
+            let Some(unit) = state
+                .audio_components
+                .audio_component_instances
+                .get(&audio_unit)
+            else {
+                return;
+            };
+            if !unit.started || unit.is_running_handler {
+                return;
+            }
+            let Some(source) = unit.al_source else {
+                return;
+            };
+            let slice_frames = unit.maximum_frames_per_slice.clamp(1, 1024);
+            let context = state
+                .al_context
+                .make_al_context_current(env.openal_manager.as_mut());
+            if context.queued_audio_seconds(source) >= 0.1 {
+                return;
+            }
+            render_audio_unit_buffer(env, audio_unit, Some(slice_frames));
+        }
+    } else {
+        render_audio_unit_buffer(env, audio_unit, None);
+    }
+}
+
+fn render_audio_unit_buffer(env: &mut Environment, audio_unit: AudioUnit, frames: Option<u32>) {
     if env.bundle.bundle_identifier().starts_with("com.ea.simcity") {
         // If enabled, we have some random crashes inside AURenderCallback ;(
         log_dbg!("Applying game-specific hack for SimCity: skipping rendering of audio units");
@@ -398,7 +434,12 @@ pub fn render_audio_unit(env: &mut Environment, audio_unit: AudioUnit) {
     // every frame over 2048 until it reaches the provided frame number.
     // TODO: Verify if this behavior is right
     let elapsed_time = now.duration_since(audio_unit_host_object.last_render_time.unwrap());
-    let number_frames = ((elapsed_time.as_secs_f64() * sample_rate) as u32).min(2048);
+    let number_frames =
+        frames.unwrap_or(((elapsed_time.as_secs_f64() * sample_rate) as u32).min(2048));
+    if number_frames == 0 {
+        audio_unit_host_object.is_running_handler = false;
+        return;
+    }
 
     let bytes_per_channel = stream_format.bits_per_channel / 8;
     let actual_bytes_per_frame = stream_format.channels_per_frame * bytes_per_channel;

@@ -58,6 +58,8 @@ jobs:
           mkdir -p build/DerivedData/Build/Products/Release-iphoneos
           cp target/aarch64-apple-ios/release/libtouchHLE.a \
             build/DerivedData/Build/Products/Release-iphoneos/libiDared32bit_static.a
+      - name: Test audio buffering
+        run: cargo test --locked --lib audio::openal::tests
       - name: Build device app without signing
         run: |
           set -o pipefail
@@ -72,6 +74,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' \
             PRODUCT_BUNDLE_IDENTIFIER=com.bixinwei.idared32bit \
+            CURRENT_PROJECT_VERSION=3 \
             ENABLE_USER_SCRIPT_SANDBOXING=NO \
             2>&1 | tee -a build.log
       - name: Package and verify IPA

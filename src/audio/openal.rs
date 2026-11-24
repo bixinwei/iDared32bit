@@ -890,6 +890,33 @@ pub struct OpenAL<'al_ctx> {
 }
 
 impl OpenAL<'_> {
+    /// Remaining audio in a source queue, measured in seconds at its pitch.
+    /// AudioUnit producers use this to keep a small lead over the SDL callback.
+    pub fn queued_audio_seconds(&self, source: ALuint) -> f64 {
+        self.with_ctx(0.0, |ctx| {
+            let Some(src) = ctx.sources.get(&source) else {
+                return 0.0;
+            };
+            src.queue
+                .iter()
+                .enumerate()
+                .skip(src.current)
+                .map(|(i, id)| {
+                    let Some(buffer) = ctx.buffers.get(id) else {
+                        return 0.0;
+                    };
+                    let consumed = if i == src.current {
+                        src.sample_pos
+                    } else {
+                        0.0
+                    };
+                    (buffer.frame_count() as f64 - consumed).max(0.0)
+                        / (buffer.sample_rate as f64 * src.pitch.max(0.01) as f64)
+                })
+                .sum()
+        })
+    }
+
     fn with_ctx<R>(&self, default: R, f: impl FnOnce(&mut ContextState) -> R) -> R {
         let mut state = self.mixer.lock().unwrap();
         match state.contexts.get_mut(&self.ctx_id) {
@@ -1633,5 +1660,72 @@ fn enum_value_from_name(name: &[u8]) -> ALenum {
         b"AL_EXPONENT_DISTANCE" => AL_EXPONENT_DISTANCE,
         b"AL_EXPONENT_DISTANCE_CLAMPED" => AL_EXPONENT_DISTANCE_CLAMPED,
         _ => AL_NONE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queued_duration_tracks_consumption_and_processed_buffers() {
+        let mut ctx = ContextState::default();
+        for id in 1..=3 {
+            ctx.buffers.insert(
+                id,
+                Buffer {
+                    samples: vec![0.25; 2048],
+                    channels: 1,
+                    sample_rate: 44100,
+                    bits: 16,
+                },
+            );
+        }
+        let mut source = Source::default();
+        source.queue.extend([1, 2, 3]);
+        source.current = 1;
+        source.processed = 1;
+        source.sample_pos = 1024.0;
+        ctx.sources.insert(1, source);
+        let mut state = MixerState::new();
+        state.contexts.insert(1, ctx);
+        let al = OpenAL {
+            mixer: Arc::new(Mutex::new(state)),
+            ctx_id: 1,
+            _al_lifetime: PhantomData,
+        };
+        assert!((al.queued_audio_seconds(1) - 3072.0 / 44100.0).abs() < 1e-9);
+        al.with_source(1, (), |source| {
+            source.current = 3;
+        });
+        assert_eq!(al.queued_audio_seconds(1), 0.0);
+    }
+
+    #[test]
+    fn buffered_stream_survives_a_slow_game_frame() {
+        let mut ctx = ContextState::default();
+        let mut source = Source::default();
+        for id in 1..=3 {
+            ctx.buffers.insert(
+                id,
+                Buffer {
+                    samples: vec![0.25; 2048],
+                    channels: 1,
+                    sample_rate: 44100,
+                    bits: 16,
+                },
+            );
+            source.queue.push_back(id);
+        }
+        source.play();
+        ctx.sources.insert(1, source);
+        let mut state = MixerState::new();
+        state.contexts.insert(1, ctx);
+        // An 80 ms frame consumes more than the old single 2048-frame slice,
+        // but stays inside the RE4 producer's 100 ms reserve.
+        let mut out = vec![0.0; 3528 * 2];
+        state.mix(&mut out);
+        assert!(out.iter().all(|sample| *sample > 0.0));
+        assert_eq!(state.contexts[&1].sources[&1].al_state(), AL_PLAYING);
     }
 }
