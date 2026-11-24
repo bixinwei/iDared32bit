@@ -6,7 +6,7 @@ on:
       runner:
         description: macOS runner
         type: choice
-        default: macos-15
+        default: macos-15-intel
         options:
           - macos-15
           - macos-15-intel
