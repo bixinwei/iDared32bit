@@ -151,7 +151,7 @@ pub mod native {
         f32,
         f32,
         f32,
-        bool,
+        i32,
         *mut f32,
         usize,
     ) -> usize;
@@ -168,7 +168,7 @@ pub mod native {
     pub fn poll(
         game: &(CString, CString),
         viewport: (f32, f32, f32, f32),
-        landscape: bool,
+        orientation: i32,
     ) -> Snapshot {
         let Some(poll) = POLL.get() else {
             return Snapshot::default();
@@ -182,7 +182,7 @@ pub mod native {
                 viewport.1,
                 viewport.2,
                 viewport.3,
-                landscape,
+                orientation,
                 values.as_mut_ptr(),
                 values.len(),
             )

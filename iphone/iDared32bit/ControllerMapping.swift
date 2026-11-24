@@ -54,7 +54,7 @@ private enum ScreenMapper {
 @_cdecl("idared_controller_mapper_poll")
 public func idaredControllerMapperPoll(
     _ gameID: UnsafePointer<CChar>, _ gameName: UnsafePointer<CChar>,
-    _ vx: Float, _ vy: Float, _ vw: Float, _ vh: Float, _ landscape: Bool,
+    _ vx: Float, _ vy: Float, _ vw: Float, _ vh: Float, _ orientation: Int32,
     _ output: UnsafeMutablePointer<Float>, _ capacity: Int
 ) -> Int {
     guard Thread.isMainThread, capacity >= 3 else { return 0 }
@@ -65,7 +65,7 @@ public func idaredControllerMapperPoll(
     }
     guard let session = ScreenMapper.session else { return 0 }
     session.updateViewport(CGRect(x: CGFloat(vx), y: CGFloat(vy),
-                                 width: CGFloat(vw), height: CGFloat(vh)), landscape: landscape)
+                                 width: CGFloat(vw), height: CGFloat(vh)), orientation: orientation)
     let contacts = session.contacts()
     output[0] = (session.profile.enabled || session.editing) ? 1 : 0
     output[1] = session.editing ? 1 : 0
@@ -97,6 +97,7 @@ private final class MappingSession {
     var configuration: ScreenConfiguration
     var saved: ScreenConfiguration
     var landscape = false
+    var orientation: Int32 = -1
     var editing = false
     var selected = 0
     var revision: UInt32 = 1
@@ -183,9 +184,10 @@ private final class MappingSession {
         controller = nil
     }
 
-    func updateViewport(_ fractions: CGRect, landscape: Bool) {
-        if self.landscape != landscape {
-            self.landscape = landscape
+    func updateViewport(_ fractions: CGRect, orientation: Int32) {
+        if self.orientation != orientation {
+            self.orientation = orientation
+            self.landscape = orientation >= 2
             status = "横屏和竖屏分别保存映射"
             changed()
         }

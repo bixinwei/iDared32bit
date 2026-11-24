@@ -1074,10 +1074,12 @@ impl Window {
         if width == 0 || height == 0 {
             return;
         }
-        let landscape = matches!(
-            self.device_orientation,
-            DeviceOrientation::LandscapeLeft | DeviceOrientation::LandscapeRight
-        );
+        let orientation = match self.device_orientation {
+            DeviceOrientation::Portrait => 0,
+            DeviceOrientation::PortraitUpsideDown => 1,
+            DeviceOrientation::LandscapeLeft => 2,
+            DeviceOrientation::LandscapeRight => 3,
+        };
         let mut snapshot = native::poll(
             game,
             (
@@ -1086,7 +1088,7 @@ impl Window {
                 vw as f32 / width as f32,
                 vh as f32 / height as f32,
             ),
-            landscape,
+            orientation,
         );
 
         // End pre-existing legacy controller presses on entering mapping mode.

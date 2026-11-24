@@ -33,9 +33,9 @@ extern void idared_set_movie_player(
     void (*)(void), double (*)(void), void (*)(double));
 
 typedef size_t (*idared_mapper_fn)(const char *, const char *, float, float, float, float,
-                                  bool, float *, size_t);
+                                  int32_t, float *, size_t);
 extern size_t idared_controller_mapper_poll(const char *, const char *, float, float,
-                                          float, float, bool, float *, size_t);
+                                          float, float, int32_t, float *, size_t);
 extern void idared_controller_mapper_stop(void);
 extern void idared_set_controller_mapper(idared_mapper_fn, void (*)(void));
 
