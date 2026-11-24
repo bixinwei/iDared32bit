@@ -35,7 +35,8 @@ impl State {
         let japanese = if bold {
             self.sans_bold_ja.get_or_insert_with(Font::sans_bold_ja)
         } else {
-            self.sans_regular_ja.get_or_insert_with(Font::sans_regular_ja)
+            self.sans_regular_ja
+                .get_or_insert_with(Font::sans_regular_ja)
         };
         // The region-specific Japanese subset lacks many simplified Han
         // characters. Keep its existing glyphs, and use the Chinese subset
@@ -48,7 +49,8 @@ impl State {
             if bold {
                 self.sans_bold_sc.get_or_insert_with(Font::sans_bold_sc)
             } else {
-                self.sans_regular_sc.get_or_insert_with(Font::sans_regular_sc)
+                self.sans_regular_sc
+                    .get_or_insert_with(Font::sans_regular_sc)
             }
         } else if bold {
             self.sans_bold_ja.as_ref().unwrap()
@@ -345,10 +347,20 @@ mod cjk_font_tests {
             assert_ne!(font.glyph_id_for_char(c as u16).0, 0, "missing {c}");
         }
         let mut drawn = 0;
-        font.draw(20.0, text, (0.0, 0.0), None, TextAlignment::Left, 1.0, |glyph| {
-            assert!(glyph.pixels.iter().any(|&coverage| coverage > 0.0));
-            drawn += 1;
-        });
+        font.draw(
+            20.0,
+            text,
+            (0.0, 0.0),
+            None,
+            TextAlignment::Left,
+            1.0,
+            |glyph| {
+                let (width, height) = glyph.size();
+                assert!((0..height as i32)
+                    .any(|y| { (0..width as i32).any(|x| glyph.pixel_at((x, y)) > 0.0) }));
+                drawn += 1;
+            },
+        );
         assert_eq!(drawn, text.chars().count());
         assert!(state.sans_regular_sc.is_some());
     }
