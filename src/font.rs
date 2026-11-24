@@ -117,7 +117,9 @@ impl Font {
             | "LiberationMono-BoldItalic.ttf"
             | "LiberationMono-Italic.ttf"
             | "NotoSansJP-Regular.otf"
-            | "NotoSansJP-Bold.otf" => 1.125,
+            | "NotoSansJP-Bold.otf"
+            | "NotoSansSC-Regular.otf"
+            | "NotoSansSC-Bold.otf" => 1.125,
             // For Marker Felt.
             "CaveatBrush-Regular.ttf" => 1.35,
             // For Verdana. Its (ascent - descent) / em, as for games' fonts.
@@ -210,6 +212,14 @@ impl Font {
     }
     pub fn sans_regular_ja() -> Font {
         Self::from_resource_file("NotoSansJP-Regular.otf")
+    }
+
+    pub fn sans_regular_sc() -> Font {
+        Self::from_resource_file("NotoSansSC-Regular.otf")
+    }
+
+    pub fn sans_bold_sc() -> Font {
+        Self::from_resource_file("NotoSansSC-Bold.otf")
     }
     pub fn sans_bold_ja() -> Font {
         Self::from_resource_file("NotoSansJP-Bold.otf")

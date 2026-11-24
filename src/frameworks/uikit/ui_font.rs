@@ -23,12 +23,40 @@ pub(super) struct State {
     fonts: HashMap<FontKind, Font>,
     sans_regular_ja: Option<Font>,
     sans_bold_ja: Option<Font>,
+    sans_regular_sc: Option<Font>,
+    sans_bold_sc: Option<Font>,
     marker_felt: Option<Font>,
     /// The names of the fonts the app bundles, in `fonts` as
     /// [FontKind::App], or [None] if they're not loaded yet.
     app_font_names: Option<Vec<Vec<String>>>,
 }
 impl State {
+    fn get_cjk_font(&mut self, bold: bool, text: &str) -> &Font {
+        let japanese = if bold {
+            self.sans_bold_ja.get_or_insert_with(Font::sans_bold_ja)
+        } else {
+            self.sans_regular_ja.get_or_insert_with(Font::sans_regular_ja)
+        };
+        // The region-specific Japanese subset lacks many simplified Han
+        // characters. Keep its existing glyphs, and use the Chinese subset
+        // when a requested Han character would otherwise be .notdef.
+        let needs_chinese = text.chars().any(|c| {
+            matches!(c as u32, 0x3400..=0x4dbf | 0x4e00..=0x9fff)
+                && japanese.glyph_id_for_char(c as u16).0 == 0
+        });
+        if needs_chinese {
+            if bold {
+                self.sans_bold_sc.get_or_insert_with(Font::sans_bold_sc)
+            } else {
+                self.sans_regular_sc.get_or_insert_with(Font::sans_regular_sc)
+            }
+        } else if bold {
+            self.sans_bold_ja.as_ref().unwrap()
+        } else {
+            self.sans_regular_ja.as_ref().unwrap()
+        }
+    }
+
     fn get_font_by_kind(&mut self, font_kind: FontKind) -> &Font {
         self.fonts
             .entry(font_kind)
@@ -304,6 +332,54 @@ fn get_app_font(env: &mut Environment, name: &str) -> Option<FontKind> {
         .map(FontKind::App)
 }
 
+#[cfg(test)]
+mod cjk_font_tests {
+    use super::*;
+
+    #[test]
+    fn simplified_chinese_glyphs_are_present_and_rasterize() {
+        let mut state = State::default();
+        let text = "继续游戏设置载入选择语言";
+        let font = get_font(&mut state, FontKind::SansRegular, text);
+        for c in text.chars() {
+            assert_ne!(font.glyph_id_for_char(c as u16).0, 0, "missing {c}");
+        }
+        let mut drawn = 0;
+        font.draw(20.0, text, (0.0, 0.0), None, TextAlignment::Left, 1.0, |glyph| {
+            assert!(glyph.pixels.iter().any(|&coverage| coverage > 0.0));
+            drawn += 1;
+        });
+        assert_eq!(drawn, text.chars().count());
+        assert!(state.sans_regular_sc.is_some());
+    }
+
+    #[test]
+    fn simplified_chinese_bold_uses_matching_font() {
+        let mut state = State::default();
+        let font = get_font(&mut state, FontKind::SansBold, "继续");
+        assert_ne!(font.glyph_id_for_char('续' as u16).0, 0);
+        assert!(state.sans_bold_sc.is_some());
+    }
+
+    #[test]
+    fn japanese_keeps_existing_fallback() {
+        let mut state = State::default();
+        let font = get_font(&mut state, FontKind::SansRegular, "ゲーム");
+        assert_ne!(font.glyph_id_for_char('ゲ' as u16).0, 0);
+        assert!(state.sans_regular_ja.is_some());
+        assert!(state.sans_regular_sc.is_none());
+    }
+
+    #[test]
+    fn latin_does_not_load_cjk_fonts() {
+        let mut state = State::default();
+        let font = get_font(&mut state, FontKind::SansRegular, "Continue");
+        assert_ne!(font.glyph_id_for_char('C' as u16).0, 0);
+        assert!(state.sans_regular_ja.is_none());
+        assert!(state.sans_regular_sc.is_none());
+    }
+}
+
 fn convert_line_break_mode(ui_mode: UILineBreakMode) -> WrapMode {
     match ui_mode {
         UILineBreakModeWordWrap => WrapMode::Word,
@@ -329,21 +405,15 @@ fn get_font<'a>(state: &'a mut State, kind: FontKind, text: &str) -> &'a Font {
         let c = c as u32;
         if (0x3000..=0x30FF).contains(&c) || // JA punctuation, kana
            (0xFF00..=0xFFEF).contains(&c) || // full-width/half-width chars
-           (0x4e00..=0x9FA0).contains(&c) || // various kanji
+           (0x4e00..=0x9FFF).contains(&c) || // Han characters
            (0x3400..=0x4DBF).contains(&c) { // more kanji
             match kind {
                 // CJK has no italic equivalent
                 FontKind::MonoRegular | FontKind::MonoItalic | FontKind::SansRegular | FontKind::SansItalic | FontKind::SerifRegular | FontKind::SerifItalic | FontKind::VerdanaRegular | FontKind::VerdanaItalic | FontKind::App(_) => {
-                    if state.sans_regular_ja.is_none() {
-                        state.sans_regular_ja = Some(Font::sans_regular_ja());
-                    }
-                    return state.sans_regular_ja.as_ref().unwrap();
+                    return state.get_cjk_font(false, text);
                 },
                 FontKind::MonoBold | FontKind::MonoBoldItalic | FontKind::SansBold | FontKind::SansBoldItalic | FontKind::SerifBold | FontKind::SerifBoldItalic | FontKind::VerdanaBold | FontKind::VerdanaBoldItalic => {
-                    if state.sans_bold_ja.is_none() {
-                        state.sans_bold_ja = Some(Font::sans_bold_ja());
-                    }
-                    return state.sans_bold_ja.as_ref().unwrap();
+                    return state.get_cjk_font(true, text);
                 },
                 FontKind::MarkerFelt => {
                     if state.marker_felt.is_none() {

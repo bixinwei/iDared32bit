@@ -25,6 +25,28 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+      - name: Add verified simplified Chinese font resources
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, urllib.request
+          revision = 'f8d157532fbfaeda587e826d4cd5b21a49186f7c'
+          fonts = {
+              'NotoSansSC-Regular.otf': 'fc0fda9394367c16c1af7555a2ae4d5e2e6a6f02',
+              'NotoSansSC-Bold.otf': 'bcc11bc30e65b69b9e5a508c3e2138197c5543cf',
+          }
+          for name, expected in fonts.items():
+              url = f'https://raw.githubusercontent.com/notofonts/noto-cjk/{revision}/Sans/SubsetOTF/SC/{name}'
+              with urllib.request.urlopen(url, timeout=90) as response:
+                  data = response.read()
+              actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              assert actual == expected, (name, actual)
+              pathlib.Path('fonts', name).write_bytes(data)
+              print('Verified font', name, len(data))
+          pathlib.Path('fonts/NotoSansSC-source.txt').write_text(
+              'Noto Sans CJK region-specific SC subset, SIL Open Font License 1.1.\n'
+              f'https://github.com/notofonts/noto-cjk/tree/{revision}/Sans/SubsetOTF/SC\n'
+              'See LICENSE.noto in this directory.\n')
+          PY
       - name: Select Xcode 26 or newer
         run: |
           python3 - <<'PY'
@@ -63,6 +85,7 @@ jobs:
           cargo test --locked --lib audio::openal::tests
           cargo test --locked --lib audio_unit_format_tests
           cargo test --locked --lib framebuffer_export_tests
+          cargo test --locked --lib cjk_font_tests
       - name: Build device app without signing
         run: |
           set -o pipefail
