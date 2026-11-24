@@ -706,6 +706,18 @@ pub struct OpenALManager {
     _audio_subsystem: Option<AudioSubsystem>,
 }
 impl OpenALManager {
+    /// Freeze mixer consumption while the host is inactive, keeping queues and
+    /// source playback state intact for foreground resumption.
+    pub fn set_output_paused(&self, paused: bool) {
+        if let Some(device) = &self._device {
+            if paused {
+                device.pause();
+            } else {
+                device.resume();
+            }
+        }
+    }
+
     pub fn new(audio_subsystem: Option<AudioSubsystem>) -> Result<Self, String> {
         if OPENALMANAGER_INSTANCE_EXISTS.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return Err("Only one OpenALManager can exist at a time!".to_string());

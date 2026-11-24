@@ -1443,11 +1443,42 @@ impl Environment {
     pub fn run(mut self) -> bool {
         let mut curr_host_context = self.threads[0].host_context.take().unwrap();
         let panic_cell = self.panic_cell.clone();
+        #[cfg(target_os = "ios")]
+        let mut host_pause_started: Option<Instant> = None;
         if let Some(mut gdb_server) = self.gdb_server.take() {
             gdb_server.wait_for_debugger(None, &mut self);
             self.gdb_server = Some(gdb_server);
         }
         loop {
+            #[cfg(target_os = "ios")]
+            {
+                use crate::controller_mapping::native;
+                if let Some(w) = self.window.as_mut() {
+                    w.on_main_stack = true;
+                }
+                if native::host_activity() == 1 {
+                    if host_pause_started.is_none() {
+                        host_pause_started = Some(Instant::now());
+                        self.openal_manager.set_output_paused(true);
+                        if let Some(w) = self.window.as_mut() {
+                            w.release_inputs_for_host_pause();
+                        }
+                        log!("Host inactive: preserving guest state and pausing CPU/audio.");
+                    }
+                    native::wait_for_activity();
+                    if let Some(w) = self.window.as_mut() {
+                        w.poll_for_events(&self.options);
+                    }
+                    continue;
+                }
+                if let Some(started) = host_pause_started.take() {
+                    // Guest monotonic time excludes pauses, avoiding a huge
+                    // simulation step when the notification drawer is dismissed.
+                    self.startup_time += started.elapsed();
+                    self.openal_manager.set_output_paused(false);
+                    log!("Host active: resuming preserved guest state.");
+                }
+            }
             if self.threads[self.current_thread].state == ThreadState::Stepping {
                 self.remaining_ticks = None;
             } else {

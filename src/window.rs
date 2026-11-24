@@ -824,6 +824,11 @@ impl Window {
                 }
                 E::AppWillEnterBackground { .. } => {
                     log!("Received app-will-resign-active event.");
+                    if cfg!(target_os = "ios") {
+                        // Native lifecycle observation pauses the scheduler and
+                        // audio. Polling must continue to see foreground events.
+                        continue;
+                    }
                     assert!(self.high_priority_event.is_none());
                     self.high_priority_event = Some(Event::AppWillResignActive);
                     // For some reason, if we don't pause event polling, we will
@@ -1064,6 +1069,26 @@ impl Window {
             _ => {}
         }
         self.event_queue.push_back(event);
+    }
+
+    #[cfg(target_os = "ios")]
+    pub fn release_inputs_for_host_pause(&mut self) {
+        let releases = std::mem::take(&mut self.input_touches);
+        if !releases.is_empty() {
+            self.event_queue.push_back(Event::TouchesUp(releases));
+        }
+        self.mapping_touches = Default::default();
+        self.virtual_cursor_last = None;
+        self.virtual_cursor_last_unsticky = None;
+        self.controller_back_held_since = None;
+        self.stick_active = false;
+        self.dpad_state = DpadState {
+            left: false,
+            right: false,
+            up: false,
+            down: false,
+            active: false,
+        };
     }
 
     pub fn set_controller_mapping_game(&mut self, id: &str, name: &str) {

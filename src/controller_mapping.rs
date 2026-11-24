@@ -158,6 +158,25 @@ pub mod native {
     type StopFn = unsafe extern "C" fn();
     static POLL: OnceLock<PollFn> = OnceLock::new();
     static STOP: OnceLock<StopFn> = OnceLock::new();
+    type ActivityFn = unsafe extern "C" fn() -> i32;
+    static ACTIVITY: OnceLock<ActivityFn> = OnceLock::new();
+    static WAIT: OnceLock<StopFn> = OnceLock::new();
+
+    #[no_mangle]
+    pub extern "C" fn idared_set_host_activity(activity: ActivityFn, wait: StopFn) {
+        let _ = ACTIVITY.set(activity);
+        let _ = WAIT.set(wait);
+    }
+
+    pub fn host_activity() -> i32 {
+        ACTIVITY.get().map_or(0, |activity| unsafe { activity() })
+    }
+
+    pub fn wait_for_activity() {
+        if let Some(wait) = WAIT.get() {
+            unsafe { wait() };
+        }
+    }
 
     #[no_mangle]
     pub extern "C" fn idared_set_controller_mapper(poll: PollFn, stop: StopFn) {

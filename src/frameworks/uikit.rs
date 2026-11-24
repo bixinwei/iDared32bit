@@ -129,6 +129,10 @@ pub fn handle_events(env: &mut Environment) -> Option<Instant> {
                 ui_touch::handle_event(env, event)
             }
             Event::AppWillResignActive => {
+                if cfg!(target_os = "ios") {
+                    log!("Host inactivity is a pause on iOS, not guest termination.");
+                    continue;
+                }
                 // Getting this event means touchHLE is becoming inactive, e.g.
                 // due to switching apps. The obvious way to handle this would
                 // be to just send `applicationWillResignActive:` to the

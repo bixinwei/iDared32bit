@@ -51,6 +51,43 @@ private enum ScreenMapper {
     nonisolated(unsafe) static var session: MappingSession?
 }
 
+private enum HostActivity {
+    nonisolated(unsafe) static var observers: [NSObjectProtocol] = []
+    nonisolated(unsafe) static var inactive = false
+    nonisolated(unsafe) static var terminating = false
+}
+
+@_cdecl("idared_install_host_activity")
+public func idaredInstallHostActivity() {
+    guard HostActivity.observers.isEmpty else { return }
+    let center = NotificationCenter.default
+    HostActivity.observers = [
+        center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { _ in
+            HostActivity.inactive = true
+            ScreenMapper.session?.waitingForNeutral = true
+        },
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            HostActivity.inactive = false
+        },
+        center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+            HostActivity.terminating = true
+        }
+    ]
+}
+
+@_cdecl("idared_host_activity_state")
+public func idaredHostActivityState() -> Int32 {
+    if HostActivity.terminating { return 2 }
+    return (HostActivity.inactive || UIApplication.shared.applicationState != .active) ? 1 : 0
+}
+
+@_cdecl("idared_host_activity_wait")
+public func idaredHostActivityWait() {
+    // Keep UIKit processing notification-center dismissal / foreground events
+    // while the guest CPU and mixer are paused. Never draw OpenGL in background.
+    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+}
+
 @_cdecl("idared_controller_mapper_poll")
 public func idaredControllerMapperPoll(
     _ gameID: UnsafePointer<CChar>, _ gameName: UnsafePointer<CChar>,
