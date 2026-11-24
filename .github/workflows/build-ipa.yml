@@ -24,6 +24,15 @@ jobs:
           rustup target add aarch64-apple-ios
           xcodebuild -version
           cmake --version
+      - name: Build Rust emulator core
+        run: |
+          set -o pipefail
+          export SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          export IPHONEOS_DEPLOYMENT_TARGET=16.0
+          cargo build --locked --release --lib --target aarch64-apple-ios 2>&1 | tee build.log
+          mkdir -p build/DerivedData/Build/Products/Release-iphoneos
+          cp target/aarch64-apple-ios/release/libtouchHLE.a \
+            build/DerivedData/Build/Products/Release-iphoneos/libiDared32bit_static.a
       - name: Build device app without signing
         run: |
           set -o pipefail
@@ -39,7 +48,7 @@ jobs:
             CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' \
             PRODUCT_BUNDLE_IDENTIFIER=com.bixinwei.idared32bit \
             ENABLE_USER_SCRIPT_SANDBOXING=NO \
-            2>&1 | tee build.log
+            2>&1 | tee -a build.log
       - name: Package and verify IPA
         run: |
           set -euo pipefail
