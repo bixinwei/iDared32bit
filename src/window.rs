@@ -676,6 +676,13 @@ impl Window {
                     controller_updated = true;
                     // Holding Back returns to the app picker (see below).
                     if button == sdl2::controller::Button::Back {
+                        // Some iOS controllers also report their face B button
+                        // as Back/Escape. Guest games must exit through the
+                        // on-screen Home button, not an ambiguous input alias.
+                        if cfg!(target_os = "ios") && self.on_screen_home_button {
+                            self.controller_back_held_since = None;
+                            continue;
+                        }
                         self.controller_back_held_since =
                             matches!(event, E::ControllerButtonDown { .. }).then(Instant::now);
                         continue;
@@ -956,6 +963,10 @@ impl Window {
                     keycode: Some(sdl2::keyboard::Keycode::Escape),
                     ..
                 } => {
+                    if cfg!(target_os = "ios") && self.on_screen_home_button {
+                        log!("Ignored Escape game-exit shortcut on iOS.");
+                        continue;
+                    }
                     echo!("Esc pressed, HomeButton event queued.");
                     Event::HomeButton
                 }
@@ -963,6 +974,10 @@ impl Window {
                     keycode: Some(sdl2::keyboard::Keycode::AcBack),
                     ..
                 } => {
+                    if cfg!(target_os = "ios") && self.on_screen_home_button {
+                        log!("Ignored Back game-exit shortcut on iOS.");
+                        continue;
+                    }
                     echo!("Back button pressed, HomeButton event queued.");
                     Event::HomeButton
                 }
