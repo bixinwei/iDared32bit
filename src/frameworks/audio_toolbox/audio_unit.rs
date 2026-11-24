@@ -365,7 +365,9 @@ fn audio_unit_decode_format(
     if bundle_id == "jp.co.capcom.res4"
         && version == "1.04.10"
         && format.format_id == kAudioFormatLinearPCM
-        && format.format_flags == (kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked)
+        // Observed ASBD flags: packed signed PCM, noninterleaved, 24 fraction
+        // bits (0xc2c). The actual OS30 callback writes interleaved S16.
+        && format.format_flags == 0xc2c
         && format.bits_per_channel == 16
         && format.channels_per_frame == 2
         && format.bytes_per_frame == 2
@@ -374,6 +376,7 @@ fn audio_unit_decode_format(
     {
         format.bytes_per_frame = 4;
         format.bytes_per_packet = 4;
+        format.format_flags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
     }
     format
 }
@@ -386,9 +389,9 @@ mod audio_unit_format_tests {
 
     fn legacy_output_format() -> AudioStreamBasicDescription {
         AudioStreamBasicDescription {
-            sample_rate: 44100.0,
+            sample_rate: 11025.0,
             format_id: kAudioFormatLinearPCM,
-            format_flags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+            format_flags: 0xc2c,
             bytes_per_packet: 2,
             frames_per_packet: 1,
             bytes_per_frame: 2,
@@ -415,7 +418,7 @@ mod audio_unit_format_tests {
         let (al_format, sample_rate, decoded) =
             decode_buffer(&mem, &format, data, pcm.len() as u32);
         assert_eq!(al_format, AL_FORMAT_STEREO16);
-        assert_eq!(sample_rate, 44100);
+        assert_eq!(sample_rate, 11025);
         assert_eq!(decoded, pcm);
     }
 
