@@ -61,6 +61,7 @@ jobs:
       - name: Test audio buffering
         run: |
           cargo test --locked --lib audio::openal::tests
+          cargo test --locked --lib audio_unit_format_tests
           cargo test --locked --lib framebuffer_export_tests
       - name: Build device app without signing
         run: |

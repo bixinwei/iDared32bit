@@ -22,6 +22,7 @@ use crate::frameworks::audio_toolbox::audio_queue::{
 };
 use crate::frameworks::carbon_core::{paramErr, OSStatus};
 use crate::frameworks::core_audio_types::{
+    kAudioFormatFlagIsPacked, kAudioFormatFlagIsSignedInteger, kAudioFormatLinearPCM,
     kAudioTimeStampHostTimeValid, kAudioTimeStampSampleTimeValid, AudioStreamBasicDescription,
     AudioTimeStamp,
 };
@@ -351,6 +352,84 @@ pub fn render_audio_unit(env: &mut Environment, audio_unit: AudioUnit) {
     }
 }
 
+fn audio_unit_decode_format(
+    bundle_id: &str,
+    version: &str,
+    mut format: AudioStreamBasicDescription,
+) -> AudioStreamBasicDescription {
+    // RE4 1.04.10's OS30 callback writes little-endian interleaved S16 stereo
+    // (four bytes per frame), although its output ASBD says two bytes/frame.
+    // The shared decoder's legacy RE4 workaround otherwise keeps only the
+    // right sample and swaps its bytes. RE4 1.00.00 uses a different S32
+    // callback, so its legacy conversion must remain intact.
+    if bundle_id == "jp.co.capcom.res4"
+        && version == "1.04.10"
+        && format.format_id == kAudioFormatLinearPCM
+        && format.format_flags == (kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked)
+        && format.bits_per_channel == 16
+        && format.channels_per_frame == 2
+        && format.bytes_per_frame == 2
+        && format.bytes_per_packet == 2
+        && format.frames_per_packet == 1
+    {
+        format.bytes_per_frame = 4;
+        format.bytes_per_packet = 4;
+    }
+    format
+}
+
+#[cfg(test)]
+mod audio_unit_format_tests {
+    use super::*;
+    use crate::audio::openal::AL_FORMAT_STEREO16;
+    use crate::mem::Mem;
+
+    fn legacy_output_format() -> AudioStreamBasicDescription {
+        AudioStreamBasicDescription {
+            sample_rate: 44100.0,
+            format_id: kAudioFormatLinearPCM,
+            format_flags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+            bytes_per_packet: 2,
+            frames_per_packet: 1,
+            bytes_per_frame: 2,
+            channels_per_frame: 2,
+            bits_per_channel: 16,
+            _reserved: 0,
+        }
+    }
+
+    #[test]
+    fn platinum_callback_pcm_keeps_both_channels_and_byte_order() {
+        // Two frames with distinct left/right samples, including a negative
+        // value; byte swapping or dropping a channel cannot pass this check.
+        let pcm: Vec<u8> = [0x1234i16, -0x2345i16, 0x4567i16, -0x5678i16]
+            .into_iter()
+            .flat_map(i16::to_le_bytes)
+            .collect();
+        let mut mem = Mem::new();
+        let data = mem.alloc(pcm.len() as u32).cast::<u8>();
+        mem.bytes_at_mut(data, pcm.len() as u32)
+            .copy_from_slice(&pcm);
+        let format =
+            audio_unit_decode_format("jp.co.capcom.res4", "1.04.10", legacy_output_format());
+        let (al_format, sample_rate, decoded) =
+            decode_buffer(&mem, &format, data, pcm.len() as u32);
+        assert_eq!(al_format, AL_FORMAT_STEREO16);
+        assert_eq!(sample_rate, 44100);
+        assert_eq!(decoded, pcm);
+    }
+
+    #[test]
+    fn older_re4_retains_legacy_sample_conversion() {
+        let original = legacy_output_format();
+        let format = audio_unit_decode_format("jp.co.capcom.res4", "1.00.00", original);
+        assert_eq!(format, original);
+        // Also retain the established decoder path for another game.
+        let format = audio_unit_decode_format("com.ea.tetris.row.sc", "1.04.10", original);
+        assert_eq!(format, original);
+    }
+}
+
 fn render_audio_unit_buffer(env: &mut Environment, audio_unit: AudioUnit, frames: Option<u32>) {
     if env.bundle.bundle_identifier().starts_with("com.ea.simcity") {
         // If enabled, we have some random crashes inside AURenderCallback ;(
@@ -525,8 +604,13 @@ fn render_audio_unit_buffer(env: &mut Environment, audio_unit: AudioUnit, frames
         .al_context
         .make_al_context_current(env.openal_manager.as_mut());
 
+    let decode_format = audio_unit_decode_format(
+        env.bundle.bundle_identifier(),
+        env.bundle.bundle_version(),
+        stream_format,
+    );
     let (al_format, _sample_rate, processed_data) =
-        decode_buffer(&env.mem, &stream_format, buffer1Data.cast(), buffer_size);
+        decode_buffer(&env.mem, &decode_format, buffer1Data.cast(), buffer_size);
 
     unsafe {
         // Get an unqueued buffer or create a new one
