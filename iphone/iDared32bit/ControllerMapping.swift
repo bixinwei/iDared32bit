@@ -160,6 +160,7 @@ private final class MappingSession {
     var fractions = CGRect.zero
     var window: MappingWindow?
     var controller: MappingViewController?
+    var overlayMaintenance: Timer?
     weak var gameView: UIView?
     var status = ""
     var cursorPoint = CGPoint(x: 0.7, y: 0.5)
@@ -260,6 +261,8 @@ private final class MappingSession {
     }
 
     func stop() {
+        overlayMaintenance?.invalidate()
+        overlayMaintenance = nil
         window?.isHidden = true
         window?.rootViewController = nil
         window = nil
@@ -296,8 +299,37 @@ private final class MappingSession {
             controller = vc
             // Keep SDL's window key; a key overlay can steal controller input.
             overlay.isHidden = false
+            // SDL can change its window frame/level after game startup. Keep
+            // UI maintenance independent of controller/guest input delivery.
+            let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+                self?.maintainOverlay()
+            }
+            overlayMaintenance = timer
+            RunLoop.main.add(timer, forMode: .common)
         }
+        maintainOverlay()
         controller?.updateViewport()
+    }
+
+    func maintainOverlay() {
+        guard !HostActivity.terminating, UIApplication.shared.applicationState == .active,
+              let overlay = window, let scene = overlay.windowScene,
+              let sdlClass = NSClassFromString("SDL_uikitviewcontroller"),
+              let source = scene.windows.first(where: {
+                  !$0.isHidden && $0.rootViewController?.isKind(of: sdlClass) == true
+              }), let root = source.rootViewController,
+              source.bounds.width > 0, source.bounds.height > 0 else { return }
+        gameView = root.view
+        controller?.gameController = root
+        let level = UIWindow.Level(rawValue: max(UIWindow.Level.normal.rawValue + 3,
+                                                 source.windowLevel.rawValue + 1))
+        if overlay.windowLevel != level { overlay.windowLevel = level }
+        if overlay.frame != source.frame {
+            overlay.frame = source.frame
+            controller?.view.setNeedsLayout()
+        }
+        if overlay.isHidden { overlay.isHidden = false }
+        controller?.ensureEntryVisible()
     }
 
     func beginEditing() {
@@ -724,6 +756,23 @@ private final class MappingViewController: UIViewController {
     func resetOverlayLayout() {
         openPosition = nil; panelPosition = nil
         viewIfLoaded?.setNeedsLayout()
+    }
+
+    func ensureEntryVisible() {
+        guard isViewLoaded else { return }
+        // Old/custom positions and asynchronous rotation layouts must never
+        // leave the sole editor entry outside the visible safe area.
+        open.isHidden = false
+        open.alpha = 1
+        view.bringSubviewToFront(open)
+        let safe = view.bounds.inset(by: view.safeAreaInsets)
+        guard safe.width >= 48, safe.height >= 48 else { return }
+        if open.frame.width != 48 || open.frame.height != 48 {
+            view.setNeedsLayout()
+        } else {
+            open.frame.origin = CGPoint(x: min(safe.maxX - 48, max(safe.minX, open.frame.minX)),
+                                        y: min(safe.maxY - 48, max(safe.minY, open.frame.minY)))
+        }
     }
 
     private func availableRect(for surface: UIView) -> CGRect {
