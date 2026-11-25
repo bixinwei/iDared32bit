@@ -11,7 +11,7 @@ use super::posix_io::{
 };
 use crate::dyld::{export_c_func, ConstantExports, FunctionExports, HostConstant};
 use crate::fs::GuestPath;
-use crate::libc::errno::{get_errno, set_errno, EBUSY, EEXIST};
+use crate::libc::errno::{get_errno, set_errno, EBUSY, EEXIST, EINVAL};
 use crate::libc::string::strlen;
 use crate::mem::{ConstPtr, ConstVoidPtr, GuestUSize, Mem, MutPtr, MutVoidPtr, Ptr, SafeRead};
 use crate::Environment;
@@ -167,6 +167,87 @@ fn fopen(env: &mut Environment, filename: ConstPtr<u8>, mode: ConstPtr<u8>) -> M
             );
             res
         }
+    }
+}
+
+/// Reopen a stream without changing the guest FILE pointer. Rebind the
+/// original descriptor too, so printf/write(1) follow stdout redirection.
+fn freopen(
+    env: &mut Environment,
+    filename: ConstPtr<u8>,
+    mode: ConstPtr<u8>,
+    stream: MutPtr<FILE>,
+) -> MutPtr<FILE> {
+    if stream.is_null() {
+        set_errno(env, EINVAL);
+        return Ptr::null();
+    }
+    _touchHLE_check_file_object_lock(env, stream);
+    let fd = env.mem.read(stream).fd;
+    // freopen closes the previous association even if the new open fails.
+    let _ = posix_io::close(env, fd);
+    env.libc_state.stdio.file_streams.remove(&stream);
+    if filename.is_null() {
+        // Darwin's mode-only extension is not implemented: fail predictably.
+        env.mem.write(stream, FILE { fd: -1 });
+        set_errno(env, EINVAL);
+        return Ptr::null();
+    }
+    let reopened = fopen(env, filename, mode);
+    if reopened.is_null() {
+        env.mem.write(stream, FILE { fd: -1 });
+        return Ptr::null();
+    }
+    let new_fd = env.mem.read(reopened).fd;
+    posix_io::rebind_open_descriptor(env, new_fd, fd);
+    let host = env.libc_state.stdio.file_streams.remove(&reopened).unwrap();
+    env.libc_state.stdio.file_streams.insert(stream, host);
+    env.mem.write(stream, FILE { fd });
+    env.mem.free(reopened.cast());
+    stream
+}
+
+#[cfg(test)]
+mod libc_compatibility_tests {
+    use super::*;
+    #[test]
+    fn freopen_preserves_stream_and_fd_resets_pushback_and_reports_failure() {
+        let mut env = Environment::new_fake_for_test();
+        let path = env.mem.alloc_and_write_cstr(b"/dev/null").cast_const();
+        let mode = env.mem.alloc_and_write_cstr(b"w+").cast_const();
+        let stream = env.mem.alloc_and_write(FILE { fd: STDOUT_FILENO });
+        assert_eq!(freopen(&mut env, path, mode, stream), stream);
+        assert_eq!(fileno(&mut env, stream), STDOUT_FILENO);
+        let bytes = env.mem.alloc_and_write_cstr(b"test output");
+        assert_eq!(
+            fwrite(&mut env, bytes.cast_const().cast(), 1, 11, stream),
+            11
+        );
+        assert_eq!(write_output(&mut env, STDOUT_FILENO, b"printf output"), 13);
+        assert_eq!(
+            posix_io::write(&mut env, STDOUT_FILENO, bytes.cast_const().cast(), 11),
+            11
+        );
+        assert_eq!(fflush(&mut env, stream), 0);
+        ungetc(&mut env, 65, stream);
+        assert_eq!(freopen(&mut env, path, mode, stream), stream);
+        assert_eq!(fread(&mut env, bytes.cast(), 1, 1, stream), 0);
+        let ordinary = fopen(&mut env, path, mode);
+        let fd = fileno(&mut env, ordinary);
+        assert_eq!(freopen(&mut env, path, mode, ordinary), ordinary);
+        assert_eq!(fileno(&mut env, ordinary), fd);
+        assert_eq!(fclose(&mut env, ordinary), 0);
+        let missing = env
+            .mem
+            .alloc_and_write_cstr(b"/missing-parent/log.txt")
+            .cast_const();
+        assert!(freopen(&mut env, missing, mode, stream).is_null());
+        assert_ne!(get_errno(&mut env), 0);
+        assert!(!env
+            .libc_state
+            .posix_io
+            .is_standard_redirected(STDOUT_FILENO));
+        assert_eq!(env.mem.read(stream).fd, -1);
     }
 }
 
@@ -369,14 +450,14 @@ fn fwrite(
 
     // TODO: Refactor, use traits instead of this hack
     match fd {
-        STDOUT_FILENO => {
+        STDOUT_FILENO if !env.libc_state.posix_io.is_standard_redirected(fd) => {
             let buffer_slice = env.mem.bytes_at(buffer.cast(), total_size);
             match std::io::stdout().write(buffer_slice) {
                 Ok(bytes_written) => (bytes_written / (item_size as usize)) as GuestUSize,
                 Err(_err) => 0,
             }
         }
-        STDERR_FILENO => {
+        STDERR_FILENO if !env.libc_state.posix_io.is_standard_redirected(fd) => {
             let buffer_slice = env.mem.bytes_at(buffer.cast(), total_size);
             match std::io::stderr().write(buffer_slice) {
                 Ok(bytes_written) => (bytes_written / (item_size as usize)) as GuestUSize,
@@ -563,12 +644,36 @@ fn fflush(env: &mut Environment, file_ptr: MutPtr<FILE>) -> i32 {
     posix_io::fflush(env, fd)
 }
 
+/// Shared output routing for printf/puts and redirected standard streams.
+pub(super) fn write_output(env: &mut Environment, fd: i32, bytes: &[u8]) -> i32 {
+    if env.libc_state.posix_io.is_standard_redirected(fd) {
+        let ptr = env.mem.alloc_and_write_cstr(bytes);
+        let result = posix_io::write(env, fd, ptr.cast_const().cast(), bytes.len() as GuestUSize);
+        env.mem.free(ptr.cast());
+        result as i32
+    } else {
+        let result = if fd == STDERR_FILENO {
+            std::io::stderr().write_all(bytes)
+        } else {
+            std::io::stdout().write_all(bytes)
+        };
+        if result.is_ok() {
+            bytes.len() as i32
+        } else {
+            EOF
+        }
+    }
+}
+
 fn puts(env: &mut Environment, s: ConstPtr<u8>) -> i32 {
     // TODO: handle errno properly
     set_errno(env, 0);
 
-    let _ = std::io::stdout().write_all(env.mem.cstr_at(s));
-    let _ = std::io::stdout().write_all(b"\n");
+    let mut bytes = env.mem.cstr_at(s).to_vec();
+    bytes.push(b'\n');
+    if write_output(env, STDOUT_FILENO, &bytes) < 0 {
+        return EOF;
+    }
     // TODO: I/O error handling
     // TODO: is this the return value iPhone OS uses?
     0
@@ -578,7 +683,9 @@ fn putchar(env: &mut Environment, c: u8) -> i32 {
     // TODO: handle errno properly
     set_errno(env, 0);
 
-    let _ = std::io::stdout().write(std::slice::from_ref(&c));
+    if write_output(env, STDOUT_FILENO, &[c]) < 0 {
+        return EOF;
+    }
     0
 }
 
@@ -748,6 +855,7 @@ pub const CONSTANTS: ConstantExports = &[
 pub const FUNCTIONS: FunctionExports = &[
     // Standard C functions
     export_c_func!(fopen(_, _)),
+    export_c_func!(freopen(_, _, _)),
     export_c_func!(fread(_, _, _, _)),
     export_c_func!(fgetc(_)),
     export_c_func!(getc(_)),

@@ -101,6 +101,7 @@ jobs:
           cargo test --locked --lib framebuffer_export_tests
           cargo test --locked --lib cjk_font_tests
           cargo test --locked --lib controller_mapping_tests
+          cargo test --locked --lib libc_compatibility_tests
       - name: Build device app without signing
         run: |
           set -o pipefail
@@ -115,7 +116,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' \
             PRODUCT_BUNDLE_IDENTIFIER=com.bixinwei.idared32bit \
-            CURRENT_PROJECT_VERSION=15 \
+            CURRENT_PROJECT_VERSION=16 \
             ENABLE_USER_SCRIPT_SANDBOXING=NO \
             2>&1 | tee -a build.log
       - name: Package and verify IPA

@@ -222,7 +222,17 @@ final class PickerModel: ObservableObject {
     var copyrightPages: [String] = []
 
     /// The value of each of the quick options.
-    @Published var quickOptionValues: [Int]
+    @Published var quickOptionValues: [Int] {
+        didSet { saveGameOptions() }
+    }
+    private let gameOptionsKey = "idared.savedGameOptions.v1"
+    func saveGameOptions() {
+        var values: [String: Int] = [:]
+        for (index, option) in input.quickOptions.enumerated() {
+            values[option.label] = quickOptionValues[index]
+        }
+        UserDefaults.standard.set(values, forKey: gameOptionsKey)
+    }
 
     @Published var headerColor = HeaderColor.saved {
         didSet {
@@ -272,6 +282,12 @@ final class PickerModel: ObservableObject {
         if let values = input.initialQuickOptionValues,
            values.count == quickOptionValues.count {
             quickOptionValues = values
+        }
+        if let stored = UserDefaults.standard.dictionary(forKey: gameOptionsKey) as? [String: Int] {
+            for (index, option) in input.quickOptions.enumerated() {
+                if let value = stored[option.label], value >= 0,
+                   value < (option.choices?.count ?? 2) { quickOptionValues[index] = value }
+            }
         }
         page = input.initialPage
         gamesFolderContents = Self.contents(of: input.appsFolder)

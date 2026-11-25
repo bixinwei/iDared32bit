@@ -17,6 +17,7 @@ pub const ENOENT: i32 = 2;
 pub const ESRCH: i32 = 3;
 pub const EINTR: i32 = 4;
 pub const EIO: i32 = 5;
+pub const ENXIO: i32 = 6;
 pub const EBADF: i32 = 9;
 pub const ECHILD: i32 = 10;
 pub const EDEADLK: i32 = 11;
@@ -117,6 +118,7 @@ fn strerror(env: &mut Environment, err_num: i32) -> ConstPtr<u8> {
             ESRCH => "No such process",
             EINTR => "Interrupted system call",
             EIO => "Input/output error",
+            ENXIO => "Device not configured",
             EBADF => "Bad file descriptor",
             ECHILD => "No child processes",
             EDEADLK => "Resource deadlock avoided",
@@ -138,7 +140,15 @@ fn strerror(env: &mut Environment, err_num: i32) -> ConstPtr<u8> {
             ENAMETOOLONG => "File name too long",
             ETIMEDOUT => "Operation timed out",
             EOVERFLOW => "Value too large to be stored in data type",
-            _ => unimplemented!("strerror({})", err_num),
+            ECONNREFUSED => "Connection refused",
+            ENETUNREACH => "Network is unreachable",
+            EHOSTUNREACH => "No route to host",
+            _ => {
+                let text = format!("Unknown error: {err_num}");
+                let ptr = env.mem.alloc_and_write_cstr(text.as_bytes()).cast_const();
+                env.libc_state.errno.strings_cache.insert(err_num, ptr);
+                return ptr;
+            }
         };
         let new_c_str = env.mem.alloc_and_write_cstr(str.as_bytes()).cast_const();
         env.libc_state
@@ -154,3 +164,24 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(perror(_)),
     export_c_func!(strerror(_)),
 ];
+
+#[cfg(test)]
+mod libc_compatibility_tests {
+    use super::*;
+    #[test]
+    fn strerror_handles_enxio_and_unknown_values_without_panicking() {
+        let mut env = Environment::new_fake_for_test();
+        for (number, expected) in [
+            (6, "Device not configured"),
+            (-1, "Unknown error: -1"),
+            (999, "Unknown error: 999"),
+            (61, "Connection refused"),
+        ] {
+            set_errno(&mut env, 22);
+            let result = strerror(&mut env, number);
+            assert_eq!(env.mem.cstr_at_utf8(result).unwrap(), expected);
+            assert_eq!(strerror(&mut env, number), result);
+            assert_eq!(get_errno(&mut env), 22);
+        }
+    }
+}

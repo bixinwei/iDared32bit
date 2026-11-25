@@ -30,16 +30,29 @@ use std::time::Duration;
 pub struct State {
     /// File descriptors _other than stdin, stdout, and stderr_
     files: Vec<Option<PosixFileHostObject>>,
+    standard_redirects: std::collections::HashMap<FileDescriptor, PosixFileHostObject>,
 }
 impl State {
+    pub(super) fn is_standard_redirected(&self, fd: FileDescriptor) -> bool {
+        self.standard_redirects.contains_key(&fd)
+    }
+
     fn file_for_fd(&mut self, fd: FileDescriptor) -> Option<&mut PosixFileHostObject> {
+        if fd < NORMAL_FILENO_BASE {
+            return self.standard_redirects.get_mut(&fd);
+        }
         self.files
             .get_mut(fd_to_file_idx(fd))
             .and_then(|file_or_none| file_or_none.as_mut())
     }
 
     pub(crate) fn is_fd_open(&mut self, fd: FileDescriptor) -> bool {
-        self.files.get(fd_to_file_idx(fd)).is_some()
+        if fd < NORMAL_FILENO_BASE {
+            return self.standard_redirects.contains_key(&fd);
+        }
+        self.files
+            .get(fd_to_file_idx(fd))
+            .is_some_and(Option::is_some)
     }
 }
 
@@ -206,6 +219,30 @@ pub fn open_direct(env: &mut Environment, path: ConstPtr<u8>, flags: i32) -> Fil
             return -1;
         }
     };
+    // Games commonly freopen stdout/stderr to the guest null device.
+    if path_string == "/dev/null" {
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .read(flags & O_ACCMODE != O_WRONLY)
+            .write(flags & O_ACCMODE != O_RDONLY);
+        let path = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        return match options.open(path) {
+            Ok(file) => find_or_create_fd(
+                env,
+                PosixFileHostObject {
+                    file: GuestFile::File(file),
+                    needs_flush: false,
+                    reached_eof: false,
+                    flags: 0,
+                    status_flags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK),
+                },
+            ),
+            Err(_) => {
+                set_errno(env, EIO);
+                -1
+            }
+        };
+    }
     // TODO: symlinks don't exist in the FS yet, so we can't "not follow" them.
     if flags & O_NOFOLLOW != 0 {
         log!("Ignoring O_NOFOLLOW when opening {:?}", path_string);
@@ -408,8 +445,10 @@ pub fn write(
     // TODO: handle errno properly
     set_errno(env, 0);
 
-    // TODO: error handling for unknown fd?
-    let file = env.libc_state.posix_io.file_for_fd(fd).unwrap();
+    let Some(file) = env.libc_state.posix_io.file_for_fd(fd) else {
+        set_errno(env, EBADF);
+        return -1;
+    };
 
     if buffer.is_null() {
         assert_eq!(size, 0);
@@ -607,6 +646,11 @@ pub fn close(env: &mut Environment, fd: FileDescriptor) -> i32 {
     set_errno(env, 0);
 
     if matches!(fd, STDIN_FILENO | STDOUT_FILENO | STDERR_FILENO) {
+        if let Some(mut file) = env.libc_state.posix_io.standard_redirects.remove(&fd) {
+            if file.needs_flush {
+                let _ = file.file.flush();
+            }
+        }
         log_dbg!("close({:?}) => 0", fd);
         return 0;
     }
@@ -973,6 +1017,29 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(ftruncate(_, _)),
     export_c_func!(truncate(_, _)),
 ];
+
+/// Move a freshly opened descriptor to the stream's original number.
+pub(super) fn rebind_open_descriptor(
+    env: &mut Environment,
+    from: FileDescriptor,
+    to: FileDescriptor,
+) {
+    if from == to {
+        return;
+    }
+    let file = env.libc_state.posix_io.files[fd_to_file_idx(from)]
+        .take()
+        .unwrap();
+    if to < NORMAL_FILENO_BASE {
+        env.libc_state.posix_io.standard_redirects.insert(to, file);
+    } else {
+        let idx = fd_to_file_idx(to);
+        if env.libc_state.posix_io.files.len() <= idx {
+            env.libc_state.posix_io.files.resize_with(idx + 1, || None);
+        }
+        env.libc_state.posix_io.files[idx] = Some(file);
+    }
+}
 
 /// Helper function, not part of API
 fn find_or_create_fd(env: &mut Environment, host_object: PosixFileHostObject) -> FileDescriptor {
