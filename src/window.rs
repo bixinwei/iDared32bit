@@ -1083,7 +1083,9 @@ impl Window {
         }
         self.mapping_touches = Default::default();
         #[cfg(target_os = "ios")]
-        { self.mapping_clock = Default::default(); }
+        {
+            self.mapping_clock = Default::default();
+        }
         self.virtual_cursor_last = None;
         self.virtual_cursor_last_unsticky = None;
         self.controller_back_held_since = None;

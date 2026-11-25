@@ -217,5 +217,7 @@ pub fn handle_events(env: &mut Environment) -> Option<Instant> {
         Some(next_due.map_or(mapping_due, |due| due.min(mapping_due)))
     }
     #[cfg(not(target_os = "ios"))]
-    { next_due }
+    {
+        next_due
+    }
 }

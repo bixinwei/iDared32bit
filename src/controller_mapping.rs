@@ -18,7 +18,10 @@ pub struct DeliveryClock {
 
 impl Default for DeliveryClock {
     fn default() -> Self {
-        Self { requested: true, next_due: None }
+        Self {
+            requested: true,
+            next_due: None,
+        }
     }
 }
 
@@ -278,7 +281,10 @@ mod controller_mapping_tests {
         let late = now + Duration::from_secs(2);
         clock.request(late);
         assert!(clock.take_sample(late));
-        assert_eq!(clock.request(late), late + Duration::from_secs_f64(1.0 / 60.0));
+        assert_eq!(
+            clock.request(late),
+            late + Duration::from_secs_f64(1.0 / 60.0)
+        );
         assert!(!clock.take_sample(late));
     }
 
