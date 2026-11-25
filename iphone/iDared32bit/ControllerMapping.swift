@@ -219,7 +219,7 @@ private final class MappingSession {
         result.bindings = input.bindings.filter {
             (0..<18).contains($0.control) && $0.x.isFinite && $0.y.isFinite
                 && (0...1).contains($0.x) && (0...1).contains($0.y)
-                && $0.radius.isFinite && (0.025...0.3).contains($0.radius)
+                && $0.radius.isFinite && (0.025...($0.swipe != nil ? 0.45 : 0.3)).contains($0.radius)
                 && (!(15...16).contains($0.control) || seenSticks.insert($0.control).inserted)
         }
         result.bindings = Array(result.bindings.prefix(64)).map { binding in
@@ -854,6 +854,7 @@ private final class MappingViewController: UIViewController {
         targetMode.isEnabled = session.selected < 15
         targetMode.selectedSegmentIndex = binding?.cursorClick == true ? 1 : 0
         radius.isEnabled = session.selected >= 15 && binding != nil
+        radius.maximumValue = isSwipe ? 0.45 : 0.3
         radius.value = binding?.radius ?? 0.12
         radiusLabel.text = "\(isSwipe ? "滑动范围" : "摇杆范围") \(Int(radius.value * 100))%"
         deadzone.value = session.profile.deadzone
@@ -961,7 +962,8 @@ private final class MappingViewController: UIViewController {
         } else {
             if session.selected == 16, var cursor = p.cursor { cursor.enabled = false; p.cursor = cursor }
             if let index = session.selectedIndex {
-                p.bindings[index].swipe = stickMode.selectedSegmentIndex == 1 ? ScreenSwipe() : nil
+                p.bindings[index].swipe = stickMode.selectedSegmentIndex == 1 ? (p.bindings[index].swipe ?? ScreenSwipe()) : nil
+                if stickMode.selectedSegmentIndex == 0 { p.bindings[index].radius = min(0.3, p.bindings[index].radius) }
                 if stickMode.selectedSegmentIndex == 1 { p.bindings[index].radius = max(0.3, p.bindings[index].radius) }
             } else {
                 guard p.bindings.count < 64 else { return }
@@ -974,7 +976,7 @@ private final class MappingViewController: UIViewController {
         p.enabled = true
         session.profile = p
         session.status = stickMode.selectedSegmentIndex == 1
-            ? "视角滑动：中心放在可拖动视角的空白区域，推住摇杆可持续转动"
+            ? "视角滑动：标记放在可拖动视角区域；范围越大，持续转向重启越少，避开其他按键"
             : "点游戏画面放置；虚拟摇杆和游标是两种不同操作"
         session.changed()
     }

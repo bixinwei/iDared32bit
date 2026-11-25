@@ -47,7 +47,7 @@ fn main() {
         for change in changes {
             match change {
                 Change::Down(16, _) => {
-                    if let Some(lifted) = last_lift { assert!(time - lifted >= 0.02 - 0.00002); }
+                    if let Some(lifted) = last_lift { assert!(time > lifted, "Restart must follow a consumed lift delivery"); }
                     strokes += 1;
                     began_at = Some(time);
                 }

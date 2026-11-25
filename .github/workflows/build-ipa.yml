@@ -70,7 +70,7 @@ jobs:
           swiftc -typecheck -swift-version 5 -target arm64-apple-ios16.0 \
             -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
             iphone/iDared32bit/ControllerMapping.swift iphone/iDared32bit/ControllerSwipe.swift 2>&1 | tee -a build.log
-          swiftc iphone/iDared32bit/ControllerSwipe.swift dev-tests/controller_swipe_tests.swift -o /tmp/controller-swipe-tests
+          swiftc iphone/iDared32bit/ControllerSwipe.swift dev-tests/controller_swipe_legacy.swift dev-tests/controller_swipe_tests.swift -o /tmp/controller-swipe-tests
           /tmp/controller-swipe-tests /tmp/controller-contact-trace.tsv
       - name: Install Rust iOS target
         run: |
@@ -115,7 +115,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' \
             PRODUCT_BUNDLE_IDENTIFIER=com.bixinwei.idared32bit \
-            CURRENT_PROJECT_VERSION=14 \
+            CURRENT_PROJECT_VERSION=15 \
             ENABLE_USER_SCRIPT_SANDBOXING=NO \
             2>&1 | tee -a build.log
       - name: Package and verify IPA
