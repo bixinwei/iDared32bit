@@ -215,10 +215,12 @@ private final class MappingSession {
             cursor.speed = cursor.speed.isFinite ? min(2, max(0.2, cursor.speed)) : 0.8
             result.cursor = cursor
         }
+        var seenSticks = Set<Int>()
         result.bindings = input.bindings.filter {
             (0..<18).contains($0.control) && $0.x.isFinite && $0.y.isFinite
                 && (0...1).contains($0.x) && (0...1).contains($0.y)
                 && $0.radius.isFinite && (0.025...0.3).contains($0.radius)
+                && (!(15...16).contains($0.control) || seenSticks.insert($0.control).inserted)
         }
         result.bindings = Array(result.bindings.prefix(64)).map { binding in
             var binding = binding
@@ -369,7 +371,10 @@ private final class MappingSession {
         if selected == 16, var cursor = p.cursor { cursor.enabled = false; p.cursor = cursor }
         if selected == 17 { p.bindings.removeAll { (11...14).contains($0.control) } }
         else if (11...14).contains(selected) { p.bindings.removeAll { $0.control == 17 } }
-        if let index = selectedIndex {
+        let existing = selectedIndex ?? ((15...16).contains(selected)
+            ? p.bindings.firstIndex(where: { $0.control == selected }) : nil)
+        if let index = existing {
+            selectedBinding = index
             p.bindings[index].x = x
             p.bindings[index].y = y
         } else {
@@ -611,7 +616,7 @@ private final class MappingViewController: UIViewController {
         dragHandle.isUserInteractionEnabled = true
         dragHandle.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(dragOverlay(_:))))
         panel.addSubview(dragHandle)
-        keysLabel.text = "添加按键 · 可重复添加同一个键"
+        keysLabel.text = "按键可添加多处 · 左右摇杆各一个"
         keysLabel.font = .systemFont(ofSize: 11, weight: .medium)
         keysLabel.textColor = .secondaryLabel
         panel.addSubview(keysLabel)
@@ -892,7 +897,7 @@ private final class MappingViewController: UIViewController {
     @objc func selectStick() {
         guard (0..<2).contains(stickControls.selectedSegmentIndex) else { return }
         session.selected = 15 + stickControls.selectedSegmentIndex
-        session.selectedBinding = nil
+        session.selectedBinding = session.profile.bindings.firstIndex { $0.control == session.selected }
         session.placingSelected = true
         session.status = session.selected == 16
             ? "点能用手指滑动视角的区域，展开后选择视角滑动并保存"

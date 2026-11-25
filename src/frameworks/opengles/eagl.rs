@@ -85,6 +85,11 @@ pub(super) struct EAGLContextHostObject {
     /// other platforms, where binding 0 is genuinely the default
     /// framebuffer.
     drawable_framebuffer: GLuint,
+    // Private presentation objects, owned by this context (FBOs are not shared).
+    // Storage changes only when the power-of-two presentation size changes.
+    presentation_texture: GLuint,
+    presentation_framebuffer: GLuint,
+    presentation_size: (u32, u32),
 }
 impl HostObject for EAGLContextHostObject {}
 
@@ -102,6 +107,9 @@ pub const CLASSES: ClassExports = objc_classes! {
         next_frame_due: None,
         mapped_buffers: HashMap::new(),
         drawable_framebuffer: 0,
+        presentation_texture: 0,
+        presentation_framebuffer: 0,
+        presentation_size: (0, 0),
     });
     env.objc.alloc_object(this, host_object, &mut env.mem)
 }
@@ -227,6 +235,16 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (())dealloc {
     let host_obj = env.objc.borrow_mut::<EAGLContextHostObject>(this);
+    // Delete private presentation resources with their owning context current.
+    if host_obj.presentation_texture != 0 || host_obj.presentation_framebuffer != 0 {
+        if let (Some(context), Some(window)) = (host_obj.gles_ctx.as_mut(), env.window.as_mut()) {
+            let mut gles = context.make_current(window);
+            unsafe {
+                gles.DeleteTextures(1, &host_obj.presentation_texture);
+                gles.DeleteFramebuffersOES(1, &host_obj.presentation_framebuffer);
+            }
+        }
+    }
     for &(guest_buf, _host_buf) in host_obj.mapped_buffers.values() {
         env.mem.free(guest_buf);
     }
@@ -610,10 +628,11 @@ unsafe fn present_renderbuffer(env: &mut Environment, _context: id) {
         .opengles
         .current_ctx_for_thread(env.current_thread)
         .unwrap();
-    let drawable_framebuffer = env
-        .objc
-        .borrow::<EAGLContextHostObject>(current_context)
-        .drawable_framebuffer;
+    let host = env.objc.borrow::<EAGLContextHostObject>(current_context);
+    let drawable_framebuffer = host.drawable_framebuffer;
+    let mut texture = host.presentation_texture;
+    let mut src_framebuffer = host.presentation_framebuffer;
+    let old_presentation_size = host.presentation_size;
 
     let gles_ctx = super::get_thread_context(
         &mut env.framework_state.opengles,
@@ -639,9 +658,11 @@ unsafe fn present_renderbuffer(env: &mut Environment, _context: id) {
     let old_framebuffer: GLuint = get_int(gles, gles11::FRAMEBUFFER_BINDING_OES) as _;
     let old_texture_2d: GLuint = get_int(gles, gles11::TEXTURE_BINDING_2D) as _;
 
-    // Create a framebuffer we can use to read from the renderbuffer
-    let mut src_framebuffer = 0;
-    gles.GenFramebuffersOES(1, &mut src_framebuffer);
+    // Reuse private objects in the actual current context. Always reattach:
+    // games may rotate, resize or switch color renderbuffers between frames.
+    if src_framebuffer == 0 {
+        gles.GenFramebuffersOES(1, &mut src_framebuffer);
+    }
     gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, src_framebuffer);
     gles.FramebufferRenderbufferOES(
         gles11::FRAMEBUFFER_OES,
@@ -650,21 +671,24 @@ unsafe fn present_renderbuffer(env: &mut Environment, _context: id) {
         renderbuffer,
     );
 
-    // Create a texture with a copy of the pixels in the framebuffer
-    let mut texture: GLuint = 0;
-    gles.GenTextures(1, &mut texture);
+    let new_texture = texture == 0;
+    if new_texture {
+        gles.GenTextures(1, &mut texture);
+    }
     gles.BindTexture(gles11::TEXTURE_2D, texture);
-    gles.TexImage2D(
-        gles11::TEXTURE_2D,
-        0,
-        gles11::RGBA as _,
-        texture_width as _,
-        texture_height as _,
-        0,
-        gles11::RGBA,
-        gles11::UNSIGNED_BYTE,
-        std::ptr::null(),
-    );
+    if new_texture || old_presentation_size != (texture_width, texture_height) {
+        gles.TexImage2D(
+            gles11::TEXTURE_2D,
+            0,
+            gles11::RGBA as _,
+            texture_width as _,
+            texture_height as _,
+            0,
+            gles11::RGBA,
+            gles11::UNSIGNED_BYTE,
+            std::ptr::null(),
+        );
+    }
 
     // Force completion of any pending draws targeting the renderbuffer before
     // copying from it. Tile-based deferred renderers (this includes Apple's
@@ -690,10 +714,8 @@ unsafe fn present_renderbuffer(env: &mut Environment, _context: id) {
         gles11::LINEAR as _,
     );
 
-    // Clean up the framebuffer object since we no longer need it.
-    // This also sets the framebuffer bindings back to zero, so rendering
-    // will go to the default framebuffer (the window).
-    gles.DeleteFramebuffersOES(1, &src_framebuffer);
+    // Keep the source FBO for the next frame; explicitly bind the target.
+    gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, drawable_framebuffer);
 
     // Reset various things that could affect the quad or virtual cursor we're
     // going to draw. Back up the old state while doing so, so it can be
@@ -759,7 +781,7 @@ unsafe fn present_renderbuffer(env: &mut Environment, _context: id) {
         tex_env_mode_arr.as_ptr().cast(),
     );
 
-    // On iOS, framebuffer 0 (bound implicitly by DeleteFramebuffersOES above)
+    // On iOS, framebuffer 0
     // is not a real on-screen framebuffer the way it is on desktop GL: SDL
     // gives this context its own dedicated FBO for its view, captured in
     // drawable_framebuffer when the context was created (see initWithAPI:
@@ -784,9 +806,6 @@ unsafe fn present_renderbuffer(env: &mut Environment, _context: id) {
             current_rotation,
         )),
     );
-
-    // Clean up the texture
-    gles.DeleteTextures(1, &texture);
 
     // Restore all the state saved before rendering
     for (&is_enabled, info) in old_arrays.iter().zip(gles1_on_gl2::ARRAYS.iter()) {
@@ -868,4 +887,12 @@ unsafe fn present_renderbuffer(env: &mut Environment, _context: id) {
     // every frame, so if it isn't rebound, every later present finds SDL's
     // renderbuffer bound, is rejected, and the screen stays black.
     gles.BindRenderbufferOES(gles11::RENDERBUFFER_OES, renderbuffer);
+    drop(gles_boxed);
+    // Release the context borrow before recording its private resource handles.
+    let host = env
+        .objc
+        .borrow_mut::<EAGLContextHostObject>(current_context);
+    host.presentation_texture = texture;
+    host.presentation_framebuffer = src_framebuffer;
+    host.presentation_size = (texture_width, texture_height);
 }
