@@ -340,7 +340,6 @@ private final class MappingSession {
         if let index = selectedIndex {
             p.bindings[index].x = x
             p.bindings[index].y = y
-            p.bindings[index].cursorClick = nil
         } else {
             guard p.bindings.count < 64 else {
                 status = "当前方向最多保存 64 个映射点"; controller?.refresh(); return
@@ -679,7 +678,7 @@ private final class MappingViewController: UIViewController {
                                      width: max(0, view.bounds.width - safe.right - open.frame.maxX - 20), height: 40)
         let width = min(420, view.bounds.width - safe.left - safe.right - 16)
         // Keep the full panel inside the safe area, independently movable.
-        let height = min(CGFloat(400), max(220, (view.bounds.height - safe.top - safe.bottom) * 0.74))
+        let height = min(CGFloat(400), max(252, (view.bounds.height - safe.top - safe.bottom) * 0.74))
         panel.frame = CGRect(x: (view.bounds.width - width) / 2,
                              y: view.bounds.height - safe.bottom - height - 4,
                              width: width, height: height)
@@ -998,7 +997,7 @@ private final class MappingCanvas: UIView {
         context.setStrokeColor(UIColor.systemBlue.withAlphaComponent(0.7).cgColor)
         context.setLineWidth(1)
         context.stroke(viewport)
-        for (index, binding) in session.profile.bindings.enumerated() where binding.cursorClick != true {
+        for (index, binding) in session.profile.bindings.enumerated() {
             let point = CGPoint(x: viewport.minX + CGFloat(binding.x) * viewport.width,
                                 y: viewport.minY + CGFloat(binding.y) * viewport.height)
             let selected = index == session.selectedIndex
@@ -1026,9 +1025,9 @@ private final class MappingCanvas: UIView {
         guard let session = session, let touch = touches.first else { return }
         let point = touch.location(in: self)
         guard viewport.contains(point) else { return }
-        let nearest = session.profile.bindings.indices.filter {
-            session.profile.bindings[$0].cursorClick != true
-        }.min { distance(session.profile.bindings[$0], point) < distance(session.profile.bindings[$1], point) }
+        let nearest = session.profile.bindings.indices.min {
+            distance(session.profile.bindings[$0], point) < distance(session.profile.bindings[$1], point)
+        }
         if !session.placingSelected, let index = nearest,
            distance(session.profile.bindings[index], point) < 27 {
             session.selected = session.profile.bindings[index].control
