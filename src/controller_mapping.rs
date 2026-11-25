@@ -42,7 +42,8 @@ impl DeliveryClock {
     }
 }
 
-pub const CONTROL_COUNT: usize = 18;
+// Independent mapping IDs, including repeated physical keys.
+pub const CONTROL_COUNT: usize = 64;
 pub const SNAPSHOT_SIZE: usize = 3 + CONTROL_COUNT * 5;
 
 pub fn guest_point(
@@ -386,6 +387,23 @@ mod controller_mapping_tests {
     }
 
     #[test]
+    fn repeated_key_mappings_keep_independent_touch_lifecycles() {
+        // Native assigns IDs by mapping entry, so two positions on A differ.
+        let snapshot = Snapshot::decode(&[
+            1.0, 0.0, 1.0, 0.0, 0.2, 0.3, 0.2, 0.3, 18.0, 0.7, 0.8, 0.7, 0.8, 63.0, 0.5, 0.5, 0.5,
+            0.5,
+        ]);
+        assert_eq!(snapshot.contacts.len(), 3);
+        let mut state = TouchState::default();
+        assert_eq!(state.update(1, &snapshot.contacts).len(), 3);
+        assert_eq!(
+            state.update(1, &snapshot.contacts[..1]),
+            vec![Change::Up(18, (0.7, 0.8)), Change::Up(63, (0.5, 0.5)),]
+        );
+        assert_eq!(state.release(), vec![Change::Up(0, (0.2, 0.3))]);
+    }
+
+    #[test]
     fn invalid_and_duplicate_contacts_cannot_inject_touches() {
         let values = [
             1.0,
@@ -406,7 +424,7 @@ mod controller_mapping_tests {
             0.3,
             0.3,
             0.3,
-            18.0,
+            CONTROL_COUNT as f32,
             0.3,
             0.3,
             0.3,

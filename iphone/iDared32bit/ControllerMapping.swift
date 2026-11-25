@@ -21,7 +21,7 @@ private struct ScreenBinding: Codable {
 private struct ScreenSwipe: Codable {
     var speed: Float = 0.9
     var invertY = false
-    var cursorWithL1 = true
+    var cursorWithL1 = false
     var precise: Bool?
 }
 
@@ -44,13 +44,13 @@ private struct ScreenConfiguration: Codable {
 }
 
 private let controlNames = [
-    "A / ×", "B / ○", "X / □", "Y / △", "L1 / LB", "R1 / RB",
-    "L2 / LT", "R2 / RT", "L3", "R3", "Start / Options",
+    "A / ×", "B / ○", "X / □", "Y / △", "LB", "RB",
+    "LT", "RT", "L3", "R3", "Start / Options",
     "方向键 ←", "方向键 ↑", "方向键 →", "方向键 ↓",
     "左摇杆", "右摇杆", "十字键摇杆"
 ]
 private let shortControlNames = [
-    "A", "B", "X", "Y", "L1", "R1", "L2", "R2", "L3", "R3", "Start",
+    "A", "B", "X", "Y", "LB", "RB", "LT", "RT", "L3", "R3", "Start",
     "←", "↑", "→", "↓", "左摇杆", "右摇杆", "十字键"
 ]
 
@@ -146,6 +146,14 @@ private final class MappingSession {
     var editing = false
     var selected = 0
     var placingSelected = false
+    // Selection refers to an individual mapping, independently of its physical key.
+    var selectedBinding: Int?
+    var selectedIndex: Int? {
+        guard let index = selectedBinding, profile.bindings.indices.contains(index),
+              profile.bindings[index].control == selected else { return nil }
+        return index
+    }
+    var selectedMapping: ScreenBinding? { selectedIndex.map { profile.bindings[$0] } }
     var revision: UInt32 = 1
     var waitingForNeutral = true
     var lastController: ObjectIdentifier?
@@ -206,14 +214,12 @@ private final class MappingSession {
             cursor.speed = cursor.speed.isFinite ? min(2, max(0.2, cursor.speed)) : 0.8
             result.cursor = cursor
         }
-        var seen = Set<Int>()
         result.bindings = input.bindings.filter {
             (0..<18).contains($0.control) && $0.x.isFinite && $0.y.isFinite
                 && (0...1).contains($0.x) && (0...1).contains($0.y)
                 && $0.radius.isFinite && (0.025...0.3).contains($0.radius)
-                && seen.insert($0.control).inserted
         }
-        result.bindings = result.bindings.map { binding in
+        result.bindings = Array(result.bindings.prefix(64)).map { binding in
             var binding = binding
             if var swipe = binding.swipe {
                 swipe.speed = swipe.speed.isFinite ? min(3, max(0.2, swipe.speed)) : 0.9
@@ -265,6 +271,8 @@ private final class MappingSession {
             self.orientation = orientation
             self.landscape = orientation >= 2
             status = "横屏和竖屏分别保存映射"
+            selectedBinding = nil
+            controller?.resetOverlayLayout()
             changed()
         }
         self.fractions = fractions
@@ -294,7 +302,8 @@ private final class MappingSession {
 
     func beginEditing() {
         editing = true
-        status = "选手柄键，再点游戏画面；可拖动已有标记"
+        selectedBinding = nil
+        status = "点按键添加新位置；同一键可重复添加，按下时同时触发"
         changed()
     }
 
@@ -328,11 +337,15 @@ private final class MappingSession {
         if selected == 16, var cursor = p.cursor { cursor.enabled = false; p.cursor = cursor }
         if selected == 17 { p.bindings.removeAll { (11...14).contains($0.control) } }
         else if (11...14).contains(selected) { p.bindings.removeAll { $0.control == 17 } }
-        if let index = p.bindings.firstIndex(where: { $0.control == selected }) {
+        if let index = selectedIndex {
             p.bindings[index].x = x
             p.bindings[index].y = y
             p.bindings[index].cursorClick = nil
         } else {
+            guard p.bindings.count < 64 else {
+                status = "当前方向最多保存 64 个映射点"; controller?.refresh(); return
+            }
+            selectedBinding = p.bindings.count
             p.bindings.append(ScreenBinding(control: selected, x: x, y: y,
                 radius: selected == 16 ? 0.3 : 0.12, swipe: selected == 16 ? ScreenSwipe() : nil))
         }
@@ -387,6 +400,7 @@ private final class MappingSession {
         let shorter = Float(min(viewport.width, viewport.height))
         let cameraBinding = profile.bindings.first { $0.control == 16 && $0.swipe != nil }
         let temporaryCursor = cameraBinding?.swipe?.cursorWithL1 == true && buttons[4] >= 0.25
+            && !profile.bindings.contains { $0.control == 4 }
         let cursorActive = profile.cursor?.enabled == true || temporaryCursor
         if runtimeCursorVisible != cursorActive {
             runtimeCursorVisible = cursorActive
@@ -405,7 +419,7 @@ private final class MappingSession {
             }
         }
         var result: [[Float]] = []
-        for binding in profile.bindings {
+        for (mappingID, binding) in profile.bindings.enumerated() {
             if binding.control < 15 {
                 if binding.control == 4 && temporaryCursor { continue }
                 if buttons[binding.control] >= 0.25 {
@@ -413,22 +427,22 @@ private final class MappingSession {
                         guard cursorActive || cameraBinding != nil else { continue }
                         let x = cursorActive ? Float(cursorPoint.x) : cameraBinding!.x
                         let y = cursorActive ? Float(cursorPoint.y) : cameraBinding!.y
-                        result.append([Float(binding.control), x, y, x, y])
+                        result.append([Float(mappingID), x, y, x, y])
                         cursorHeld = true
                         canvas.setNeedsDisplay()
                     } else {
-                        result.append([Float(binding.control), binding.x, binding.y, binding.x, binding.y])
+                        result.append([Float(mappingID), binding.x, binding.y, binding.x, binding.y])
                     }
                 }
             } else {
                 if binding.control == 16 && cursorActive {
-                    swipeTrackers.removeValue(forKey: 16)
+                    swipeTrackers.removeValue(forKey: mappingID)
                     continue
                 }
                 let (x, y) = sticks[binding.control - 15]
                 let magnitude = hypotf(x, y)
                 guard magnitude > profile.deadzone else {
-                    swipeTrackers.removeValue(forKey: binding.control)
+                    swipeTrackers.removeValue(forKey: mappingID)
                     continue
                 }
                 let distance = (min(1, magnitude) - profile.deadzone) / (1 - profile.deadzone)
@@ -439,20 +453,20 @@ private final class MappingSession {
                     let speed = swipe.speed * shorter * dt
                     let delta = SIMD2<Float>(direction.x * speed / Float(viewport.width),
                         direction.y * speed / Float(viewport.height) * (swipe.invertY ? -1 : 1))
-                    var tracker = swipeTrackers[binding.control] ?? ControllerSwipeTracker()
+                    var tracker = swipeTrackers[mappingID] ?? ControllerSwipeTracker()
                     let contact = tracker.sample(anchor: SIMD2<Float>(binding.x, binding.y),
                         halfSize: SIMD2<Float>(radius / Float(viewport.width), radius / Float(viewport.height)),
                         delta: delta, elapsed: dt)
-                    swipeTrackers[binding.control] = tracker
+                    swipeTrackers[mappingID] = tracker
                     if let contact = contact {
-                        result.append([Float(binding.control), contact.point.x, contact.point.y,
+                        result.append([Float(mappingID), contact.point.x, contact.point.y,
                                        contact.start.x, contact.start.y])
                     }
                     continue
                 }
                 let px = binding.x + x / magnitude * distance * radius / Float(viewport.width)
                 let py = binding.y + y / magnitude * distance * radius / Float(viewport.height)
-                result.append([Float(binding.control), min(1, max(0, px)), min(1, max(0, py)),
+                result.append([Float(mappingID), min(1, max(0, px)), min(1, max(0, py)),
                                binding.x, binding.y])
             }
         }
@@ -492,9 +506,13 @@ private final class MappingViewController: UIViewController {
     let cursorLabel = UILabel()
     let cursorSpeed = UISlider()
     let cursorSpeedLabel = UILabel()
-    let scroll = UIScrollView()
-    let choices = UIStackView()
-    let stickControls = UISegmentedControl(items: ["左摇杆映射", "右摇杆映射", "十字键映射"])
+    let stickControls = UISegmentedControl(items: ["⊕ 左摇杆", "⊕ 右摇杆"])
+    let dragHandle = UILabel()
+    let keysLabel = UILabel()
+    var openPosition: CGPoint?
+    var panelPosition: CGPoint?
+    var panOrigin = CGPoint.zero
+    weak var dragSurface: UIView?
     let settingsScroll = UIScrollView()
     let settingsContent = UIView()
     let placementHint = UILabel()
@@ -527,9 +545,14 @@ private final class MappingViewController: UIViewController {
         canvas.session = session
         view.addSubview(canvas)
         configure(open, "手柄", action: #selector(edit))
-        open.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+        open.setImage(UIImage(systemName: "gamecontroller.fill"), for: .normal)
+        open.backgroundColor = UIColor(red: 0.08, green: 0.14, blue: 0.24, alpha: 0.94)
+        open.tintColor = .white
+        open.layer.borderWidth = 1
+        open.layer.borderColor = UIColor.systemCyan.withAlphaComponent(0.7).cgColor
+        open.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(dragOverlay(_:))))
         open.setTitleColor(.white, for: .normal)
-        open.layer.cornerRadius = 18
+        open.layer.cornerRadius = 24
         open.accessibilityLabel = "编辑手柄屏幕映射"
         view.addSubview(open)
         placementHint.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -546,7 +569,21 @@ private final class MappingViewController: UIViewController {
         modeLabel.layer.cornerRadius = 8
         modeLabel.clipsToBounds = true
         view.addSubview(modeLabel)
-        panel.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.96)
+        panel.overrideUserInterfaceStyle = .dark
+        panel.backgroundColor = UIColor(red: 0.055, green: 0.08, blue: 0.13, alpha: 0.97)
+        panel.layer.borderWidth = 1
+        panel.layer.borderColor = UIColor.systemCyan.withAlphaComponent(0.35).cgColor
+        dragHandle.text = "⠿ 拖动面板 · 按键映射"
+        dragHandle.textAlignment = .center
+        dragHandle.font = .systemFont(ofSize: 12, weight: .semibold)
+        dragHandle.textColor = .secondaryLabel
+        dragHandle.isUserInteractionEnabled = true
+        dragHandle.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(dragOverlay(_:))))
+        panel.addSubview(dragHandle)
+        keysLabel.text = "添加按键 · 可重复添加同一个键"
+        keysLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        keysLabel.textColor = .secondaryLabel
+        panel.addSubview(keysLabel)
         panel.layer.cornerRadius = 16
         view.addSubview(panel)
         panel.addSubview(settingsScroll)
@@ -564,19 +601,18 @@ private final class MappingViewController: UIViewController {
         hint.font = .systemFont(ofSize: 11)
         panel.addSubview(enabled)
         enabled.addTarget(self, action: #selector(toggleEnabled), for: .valueChanged)
-        choices.axis = .horizontal
-        choices.spacing = 6
-        scroll.addSubview(choices)
-        panel.addSubview(scroll)
         panel.addSubview(stickControls)
         stickControls.addTarget(self, action: #selector(selectStick), for: .valueChanged)
-        for (index, name) in controlNames.prefix(15).enumerated() {
+        for index in [0, 1, 2, 3, 4, 6, 5, 7] {
+            let name = shortControlNames[index]
             let button = UIButton(type: .system)
             button.tag = index
             configure(button, name, action: #selector(selectControl(_:)))
             button.contentEdgeInsets = UIEdgeInsets(top: 5, left: 9, bottom: 5, right: 9)
-            button.layer.cornerRadius = 8
-            choices.addArrangedSubview(button)
+            button.layer.cornerRadius = 18
+            button.layer.borderWidth = 1
+            button.layer.borderColor = UIColor.systemCyan.withAlphaComponent(0.4).cgColor
+            panel.addSubview(button)
             choiceButtons.append(button)
         }
         radius.minimumValue = 0.025
@@ -594,7 +630,7 @@ private final class MappingViewController: UIViewController {
         invertYLabel.text = "反转视角纵向"
         settingsContent.addSubview(invertY)
         invertY.addTarget(self, action: #selector(changeInvertY), for: .valueChanged)
-        cursorModifierLabel.text = "按住 L1/LB 临时用游标"
+        cursorModifierLabel.text = "未映射 LB 时，按住切换游标"
         settingsContent.addSubview(cursorModifier)
         cursorModifier.addTarget(self, action: #selector(changeCursorModifier), for: .valueChanged)
         responseLabel.text = "视角响应"
@@ -611,7 +647,7 @@ private final class MappingViewController: UIViewController {
         actions.axis = .horizontal
         actions.distribution = .fillEqually
         actions.spacing = 4
-        var actionItems: [(String, Selector)] = [("删除此键", #selector(removeSelected))]
+        var actionItems: [(String, Selector)] = [("删除此点", #selector(removeSelected))]
         if session.isDeadSpace { actionItems.append(("推荐预设", #selector(applyPreset))) }
         actionItems.append(contentsOf: [("取消", #selector(cancel)), ("保存", #selector(save))])
         for (name, selector) in actionItems {
@@ -621,6 +657,7 @@ private final class MappingViewController: UIViewController {
         }
         actions.tag = 100
         panel.addSubview(actions)
+        view.bringSubviewToFront(open)
         refresh()
     }
 
@@ -634,26 +671,31 @@ private final class MappingViewController: UIViewController {
         super.viewDidLayoutSubviews()
         canvas.frame = view.bounds
         let safe = view.safeAreaInsets
-        open.frame = CGRect(x: safe.left + 12, y: safe.top + 8, width: 66, height: 36)
+        open.frame = CGRect(x: safe.left + 12, y: safe.top + 8, width: 48, height: 48)
+        restoreOverlayPosition(open, position: openPosition, key: "entry")
         modeLabel.frame = CGRect(x: view.bounds.width - safe.right - 172, y: safe.top + 8,
                                  width: 160, height: 24)
         placementHint.frame = CGRect(x: open.frame.maxX + 8, y: safe.top + 8,
                                      width: max(0, view.bounds.width - safe.right - open.frame.maxX - 20), height: 40)
-        let width = min(500, view.bounds.width - safe.left - safe.right - 16)
-        // Dock the editor along the bottom; hide it to position a key underneath.
-        let height = min(CGFloat(350), view.bounds.height - safe.top - safe.bottom - 56)
+        let width = min(420, view.bounds.width - safe.left - safe.right - 16)
+        // Keep the full panel inside the safe area, independently movable.
+        let height = min(CGFloat(400), max(220, (view.bounds.height - safe.top - safe.bottom) * 0.74))
         panel.frame = CGRect(x: (view.bounds.width - width) / 2,
                              y: view.bounds.height - safe.bottom - height - 4,
                              width: width, height: height)
-        titleLabel.frame = CGRect(x: 10, y: 7, width: width - 75, height: 20)
-        enabled.frame = CGRect(x: width - 62, y: 5, width: 51, height: 31)
-        connection.frame = CGRect(x: 10, y: 28, width: width - 80, height: 16)
-        stickControls.frame = CGRect(x: 10, y: 47, width: width - 20, height: 30)
-        scroll.frame = CGRect(x: 8, y: 82, width: width - 16, height: 33)
-        let choiceSize = choices.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
-        choices.frame = CGRect(origin: .zero, size: CGSize(width: choiceSize.width, height: 33))
-        scroll.contentSize = choices.bounds.size
-        settingsScroll.frame = CGRect(x: 0, y: 119, width: width, height: max(30, height - 155))
+        restoreOverlayPosition(panel, position: panelPosition, key: "panel")
+        dragHandle.frame = CGRect(x: 8, y: 2, width: width - 16, height: 28)
+        titleLabel.frame = CGRect(x: 10, y: 32, width: width - 75, height: 20)
+        enabled.frame = CGRect(x: width - 62, y: 30, width: 51, height: 31)
+        connection.frame = CGRect(x: 10, y: 54, width: width - 80, height: 16)
+        stickControls.frame = CGRect(x: 10, y: 76, width: width - 20, height: 32)
+        keysLabel.frame = CGRect(x: 12, y: 113, width: width - 24, height: 16)
+        let keyWidth = (width - 26) / 8
+        for (column, button) in choiceButtons.enumerated() {
+            button.frame = CGRect(x: 10 + CGFloat(column) * keyWidth, y: 134,
+                                  width: keyWidth - 4, height: 36)
+        }
+        settingsScroll.frame = CGRect(x: 0, y: 179, width: width, height: max(30, height - 217))
         settingsContent.frame = CGRect(x: 0, y: 0, width: width, height: 315)
         settingsScroll.contentSize = settingsContent.bounds.size
         selectedLabel.frame = CGRect(x: 10, y: 0, width: width - 20, height: 18)
@@ -678,6 +720,48 @@ private final class MappingViewController: UIViewController {
         updateViewport()
     }
 
+    private var layoutKey: String { "mapping-overlay.\(session.gameID).\(session.landscape ? "landscape" : "portrait")" }
+
+    func resetOverlayLayout() {
+        openPosition = nil; panelPosition = nil
+        viewIfLoaded?.setNeedsLayout()
+    }
+
+    private func availableRect(for surface: UIView) -> CGRect {
+        let safe = view.bounds.inset(by: view.safeAreaInsets)
+        return CGRect(x: safe.minX, y: safe.minY,
+                      width: max(0, safe.width - surface.bounds.width),
+                      height: max(0, safe.height - surface.bounds.height))
+    }
+
+    private func restoreOverlayPosition(_ surface: UIView, position: CGPoint?, key: String) {
+        let stored = UserDefaults.standard.array(forKey: layoutKey + "." + key) as? [Double]
+        let point = position ?? (stored?.count == 2 ? CGPoint(x: stored![0], y: stored![1]) : nil)
+        guard let point = point, point.x.isFinite, point.y.isFinite else { return }
+        let travel = availableRect(for: surface)
+        surface.frame.origin = CGPoint(x: travel.minX + min(1, max(0, point.x)) * travel.width,
+                                       y: travel.minY + min(1, max(0, point.y)) * travel.height)
+    }
+
+    @objc private func dragOverlay(_ gesture: UIPanGestureRecognizer) {
+        let surface = gesture.view === open ? open : panel
+        if gesture.state == .began { panOrigin = surface.frame.origin; dragSurface = surface }
+        guard dragSurface === surface else { return }
+        let delta = gesture.translation(in: view)
+        let travel = availableRect(for: surface)
+        let origin = CGPoint(x: min(travel.maxX, max(travel.minX, panOrigin.x + delta.x)),
+                             y: min(travel.maxY, max(travel.minY, panOrigin.y + delta.y)))
+        surface.frame.origin = origin
+        let unit = CGPoint(x: travel.width > 0 ? (origin.x - travel.minX) / travel.width : 0,
+                           y: travel.height > 0 ? (origin.y - travel.minY) / travel.height : 0)
+        if surface === open { openPosition = unit } else { panelPosition = unit }
+        if gesture.state == .ended || gesture.state == .cancelled {
+            UserDefaults.standard.set([Double(unit.x), Double(unit.y)],
+                                      forKey: layoutKey + (surface === open ? ".entry" : ".panel"))
+            dragSurface = nil
+        }
+    }
+
     func updateViewport() {
         guard isViewLoaded, let source = session.gameView else { return }
         let bounds = source.convert(source.bounds, to: canvas)
@@ -698,12 +782,14 @@ private final class MappingViewController: UIViewController {
         panel.isHidden = !session.editing || controlsCollapsed
         placementHint.isHidden = !session.editing || !controlsCollapsed
         placementHint.text = " \(controlNames[session.selected])：点游戏画面放置，展开后调整范围并保存"
-        stickControls.selectedSegmentIndex = session.selected >= 15
+        stickControls.selectedSegmentIndex = (15...16).contains(session.selected)
             ? session.selected - 15 : UISegmentedControl.noSegment
-        open.setTitle(session.editing ? (controlsCollapsed ? "展开" : "收起") : "手柄", for: .normal)
+        open.setTitle(nil, for: .normal)
+        open.setImage(UIImage(systemName: session.editing ? (controlsCollapsed ? "slider.horizontal.3" : "chevron.down") : "gamecontroller.fill"), for: .normal)
+        open.accessibilityLabel = session.editing ? (controlsCollapsed ? "展开映射面板" : "收起映射面板") : "编辑手柄屏幕映射"
         titleLabel.text = "\(session.gameName) · \(session.landscape ? "横屏" : "竖屏")映射"
         enabled.isOn = session.profile.enabled
-        let binding = session.profile.bindings.first { $0.control == session.selected }
+        let binding = session.selectedMapping
         let isSwipe = binding?.swipe != nil
         updateModeLabel()
         targetMode.isHidden = session.selected >= 15
@@ -711,7 +797,7 @@ private final class MappingViewController: UIViewController {
         stickMode.setEnabled(session.selected == 16, forSegmentAt: 2)
         stickMode.selectedSegmentIndex = session.selected == 16 && session.profile.cursor?.enabled == true
             ? 2 : (isSwipe ? 1 : 0)
-        selectedLabel.text = "\(controlNames[session.selected])：\(isSwipe ? "持续视角滑动" : (binding?.cursorClick == true ? "点击当前游标" : (binding == nil ? "点画面添加" : "拖动标记调整")))"
+        selectedLabel.text = "\(controlNames[session.selected]) \(session.selectedIndex.map { "#\($0 + 1)" } ?? "新位置")：\(isSwipe ? "持续视角滑动" : (binding?.cursorClick == true ? "点击当前游标" : (binding == nil ? "点画面添加" : "拖动标记调整")))"
         targetMode.isEnabled = session.selected < 15
         targetMode.selectedSegmentIndex = binding?.cursorClick == true ? 1 : 0
         radius.isEnabled = session.selected >= 15 && binding != nil
@@ -750,12 +836,15 @@ private final class MappingViewController: UIViewController {
     }
     @objc func selectControl(_ sender: UIButton) {
         session.selected = sender.tag
+        session.selectedBinding = nil
+        session.status = "点画面添加新的 \(shortControlNames[sender.tag]) 位置；原有位置保留"
         session.placingSelected = true
         refresh()
     }
     @objc func selectStick() {
-        guard (0..<3).contains(stickControls.selectedSegmentIndex) else { return }
+        guard (0..<2).contains(stickControls.selectedSegmentIndex) else { return }
         session.selected = 15 + stickControls.selectedSegmentIndex
+        session.selectedBinding = nil
         session.placingSelected = true
         session.status = session.selected == 16
             ? "点能用手指滑动视角的区域，展开后选择视角滑动并保存"
@@ -768,7 +857,7 @@ private final class MappingViewController: UIViewController {
     }
     @objc func changeRadius() {
         var p = session.profile
-        if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+        if let index = session.selectedIndex {
             p.bindings[index].radius = radius.value
         }
         session.profile = p; session.changed()
@@ -781,16 +870,18 @@ private final class MappingViewController: UIViewController {
         var p = session.profile
         let cursorClick = targetMode.selectedSegmentIndex == 1
         if cursorClick {
-            if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+            if let index = session.selectedIndex {
                 p.bindings[index].cursorClick = true
             } else {
+                guard p.bindings.count < 64 else { return }
+                session.selectedBinding = p.bindings.count
                 p.bindings.append(ScreenBinding(control: session.selected, x: 0.5, y: 0.5, cursorClick: true))
             }
             var cursor = p.cursor ?? ScreenCursor()
             cursor.enabled = !p.bindings.contains { $0.control == 16 && $0.swipe != nil }
             p.cursor = cursor
             p.enabled = true
-        } else if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+        } else if let index = session.selectedIndex {
             p.bindings[index].cursorClick = nil
         }
         session.profile = p; session.changed()
@@ -802,7 +893,7 @@ private final class MappingViewController: UIViewController {
     }
     @objc func changeCursorSpeed() {
         var p = session.profile
-        if let index = p.bindings.firstIndex(where: { $0.control == session.selected }), p.bindings[index].swipe != nil {
+        if let index = session.selectedIndex, p.bindings[index].swipe != nil {
             p.bindings[index].swipe?.speed = cursorSpeed.value
         } else {
             var cursor = p.cursor ?? ScreenCursor(); cursor.speed = cursorSpeed.value; p.cursor = cursor
@@ -816,10 +907,12 @@ private final class MappingViewController: UIViewController {
             var cursor = p.cursor ?? ScreenCursor(); cursor.enabled = true; p.cursor = cursor
         } else {
             if session.selected == 16, var cursor = p.cursor { cursor.enabled = false; p.cursor = cursor }
-            if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+            if let index = session.selectedIndex {
                 p.bindings[index].swipe = stickMode.selectedSegmentIndex == 1 ? ScreenSwipe() : nil
                 if stickMode.selectedSegmentIndex == 1 { p.bindings[index].radius = max(0.3, p.bindings[index].radius) }
             } else {
+                guard p.bindings.count < 64 else { return }
+                session.selectedBinding = p.bindings.count
                 p.bindings.append(ScreenBinding(control: session.selected,
                     x: session.selected == 16 ? 0.72 : 0.2, y: 0.5, radius: 0.3,
                     swipe: stickMode.selectedSegmentIndex == 1 ? ScreenSwipe() : nil))
@@ -834,21 +927,21 @@ private final class MappingViewController: UIViewController {
     }
     @objc func changeInvertY() {
         var p = session.profile
-        if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+        if let index = session.selectedIndex {
             p.bindings[index].swipe?.invertY = invertY.isOn
         }
         session.profile = p; session.changed()
     }
     @objc func changeCursorModifier() {
         var p = session.profile
-        if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+        if let index = session.selectedIndex {
             p.bindings[index].swipe?.cursorWithL1 = cursorModifier.isOn
         }
         session.profile = p; session.changed()
     }
     @objc func changeResponseMode() {
         var p = session.profile
-        if let index = p.bindings.firstIndex(where: { $0.control == session.selected }) {
+        if let index = session.selectedIndex {
             p.bindings[index].swipe?.precise = responseMode.selectedSegmentIndex == 1
         }
         session.profile = p; session.changed()
@@ -861,12 +954,15 @@ private final class MappingViewController: UIViewController {
         modeLabel.text = cursor ? "右摇杆 · 游标" : (camera ? "右摇杆 · 视角滑动" : "右摇杆 · 虚拟摇杆")
     }
     @objc func applyPreset() {
+        session.selectedBinding = nil
         session.profile = MappingSession.deadSpaceProfile()
-        session.status = "左摇杆移动；右摇杆游标；R2/RT 点击或按住拖动"
+        session.status = "左摇杆移动；右摇杆视角；RT 点击视角中心"
         session.changed()
     }
     @objc func removeSelected() {
-        var p = session.profile; p.bindings.removeAll { $0.control == session.selected }
+        guard let index = session.selectedIndex else { return }
+        var p = session.profile; p.bindings.remove(at: index)
+        session.selectedBinding = nil
         session.profile = p; session.changed()
     }
     @objc func cancel() { session.finish(save: false) }
@@ -902,10 +998,10 @@ private final class MappingCanvas: UIView {
         context.setStrokeColor(UIColor.systemBlue.withAlphaComponent(0.7).cgColor)
         context.setLineWidth(1)
         context.stroke(viewport)
-        for binding in session.profile.bindings where binding.cursorClick != true {
+        for (index, binding) in session.profile.bindings.enumerated() where binding.cursorClick != true {
             let point = CGPoint(x: viewport.minX + CGFloat(binding.x) * viewport.width,
                                 y: viewport.minY + CGFloat(binding.y) * viewport.height)
-            let selected = binding.control == session.selected
+            let selected = index == session.selectedIndex
             let color: UIColor = selected ? .systemYellow : .systemBlue
             if binding.control >= 15 {
                 let radius = CGFloat(binding.radius) * min(viewport.width, viewport.height)
@@ -917,7 +1013,7 @@ private final class MappingCanvas: UIView {
             let marker = CGRect(x: point.x - 22, y: point.y - 18, width: 44, height: 36)
             context.setFillColor(color.withAlphaComponent(0.8).cgColor)
             context.fillEllipse(in: marker)
-            let label = shortControlNames[binding.control] as NSString
+            let label = "\(shortControlNames[binding.control])·\(index + 1)" as NSString
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: UIFont.boldSystemFont(ofSize: 11), .foregroundColor: UIColor.black
             ]
@@ -930,11 +1026,15 @@ private final class MappingCanvas: UIView {
         guard let session = session, let touch = touches.first else { return }
         let point = touch.location(in: self)
         guard viewport.contains(point) else { return }
-        let nearest = session.profile.bindings.filter { $0.cursorClick != true }.min {
-            distance($0, point) < distance($1, point)
-        }
-        if !session.placingSelected, let nearest = nearest, distance(nearest, point) < 27 {
-            session.selected = nearest.control
+        let nearest = session.profile.bindings.indices.filter {
+            session.profile.bindings[$0].cursorClick != true
+        }.min { distance(session.profile.bindings[$0], point) < distance(session.profile.bindings[$1], point) }
+        if !session.placingSelected, let index = nearest,
+           distance(session.profile.bindings[index], point) < 27 {
+            session.selected = session.profile.bindings[index].control
+            session.selectedBinding = index
+        } else if !session.placingSelected {
+            session.selectedBinding = nil
         }
         session.placingSelected = false
         dragging = true
