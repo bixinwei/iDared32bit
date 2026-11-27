@@ -47,7 +47,7 @@
  * SDL renders with a full-screen Metal layer, and its window sits at a high
  * window level. FlyDigi's floating UI lives in its own `FZUIWindow` (and FLEX's
  * windows), which come up at a normal level and get drawn *under* SDL, so they
- * are invisible. A repeating keeper forces every FZ*/FLEX window above the
+ * are invisible. A repeating keeper forces every FZ or FLEX window above the
  * SDL window's level.
  */
 
