@@ -96,10 +96,19 @@ pub const O_ACCMODE: OpenFlag = O_RDWR | O_WRONLY | O_RDONLY;
 pub const O_NONBLOCK: OpenFlag = 0x4;
 pub const O_APPEND: OpenFlag = 0x8;
 pub const O_SHLOCK: OpenFlag = 0x10;
+pub const O_EXLOCK: OpenFlag = 0x20;
+pub const O_ASYNC: OpenFlag = 0x40;
+pub const O_FSYNC: OpenFlag = 0x80;
+pub const O_SYNC: OpenFlag = O_FSYNC;
 pub const O_NOFOLLOW: OpenFlag = 0x100;
 pub const O_CREAT: OpenFlag = 0x200;
 pub const O_TRUNC: OpenFlag = 0x400;
 pub const O_EXCL: OpenFlag = 0x800;
+pub const O_EVTONLY: OpenFlag = 0x8000;
+pub const O_NOCTTY: OpenFlag = 0x20000;
+pub const O_DIRECTORY: OpenFlag = 0x100000;
+pub const O_SYMLINK: OpenFlag = 0x200000;
+pub const O_CLOEXEC: OpenFlag = 0x1000000;
 
 /// File control command flags.
 /// This alias is for readability, POSIX just uses `int`.
@@ -156,19 +165,30 @@ fn open(env: &mut Environment, path: ConstPtr<u8>, flags: i32, _args: DotDotDot)
 
 /// Special extension for host code: [open] without the [DotDotDot].
 pub fn open_direct(env: &mut Environment, path: ConstPtr<u8>, flags: i32) -> FileDescriptor {
-    // TODO: support more flags, this list is not complete
-    assert!(
-        flags
-            & !(O_ACCMODE
-                | O_NONBLOCK
-                | O_APPEND
-                | O_SHLOCK
-                | O_NOFOLLOW
-                | O_CREAT
-                | O_TRUNC
-                | O_EXCL)
-            == 0
-    );
+    // Real games pass many Darwin flags that this emulator doesn't model
+    // (O_CLOEXEC, O_SYNC, O_EVTONLY, O_DIRECTORY, ...). Ignore them instead
+    // of panicking so unsupported opens simply behave like a plain open.
+    let known_flags = O_ACCMODE
+        | O_NONBLOCK
+        | O_APPEND
+        | O_SHLOCK
+        | O_EXLOCK
+        | O_ASYNC
+        | O_FSYNC
+        | O_NOFOLLOW
+        | O_CREAT
+        | O_TRUNC
+        | O_EXCL
+        | O_EVTONLY
+        | O_NOCTTY
+        | O_DIRECTORY
+        | O_SYMLINK
+        | O_CLOEXEC;
+    let ignored_flags = flags & !known_flags;
+    if ignored_flags != 0 {
+        log!("open(): ignoring unrecognised flags {ignored_flags:#x}");
+    }
+    let flags = flags & known_flags;
 
     if path.is_null() {
         log_dbg!("open({:?}, {:#x}) => -1", path, flags);

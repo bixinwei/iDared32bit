@@ -440,7 +440,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "This app does not use Bluetooth directly. A bundled library links Bluetooth APIs for optional Steam Controller support, but that feature is disabled.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Connect a FlyDigi gamepad to map its buttons to on-screen touches.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
@@ -476,7 +476,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "This app does not use Bluetooth directly. A bundled library links Bluetooth APIs for optional Steam Controller support, but that feature is disabled.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Connect a FlyDigi gamepad to map its buttons to on-screen touches.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
@@ -574,7 +574,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "This app does not use Bluetooth directly. A bundled library links Bluetooth APIs for optional Steam Controller support, but that feature is disabled.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Connect a FlyDigi gamepad to map its buttons to on-screen touches.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;

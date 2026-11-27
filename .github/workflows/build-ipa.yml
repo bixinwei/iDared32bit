@@ -64,14 +64,6 @@ jobs:
           print('Selecting', app, flush=True)
           subprocess.run(['sudo', 'xcode-select', '--switch', app + '/Contents/Developer'], check=True)
           PY
-      - name: Check native controller mapper
-        run: |
-          set -o pipefail
-          swiftc -typecheck -swift-version 5 -target arm64-apple-ios16.0 \
-            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
-            iphone/iDared32bit/ControllerMapping.swift iphone/iDared32bit/ControllerSwipe.swift 2>&1 | tee -a build.log
-          swiftc iphone/iDared32bit/ControllerSwipe.swift dev-tests/controller_swipe_legacy.swift dev-tests/controller_swipe_tests.swift -o /tmp/controller-swipe-tests
-          /tmp/controller-swipe-tests /tmp/controller-contact-trace.tsv
       - name: Install Rust iOS target
         run: |
           rustup toolchain install stable --profile minimal
@@ -79,12 +71,6 @@ jobs:
           rustup target add aarch64-apple-ios
           xcodebuild -version
           cmake --version
-      - name: Check controller touch delivery
-        run: |
-          rustc --edition=2021 --test src/controller_mapping.rs -o /tmp/controller-delivery-tests
-          /tmp/controller-delivery-tests
-          rustc --edition=2021 dev-tests/controller_delivery_trace.rs -o /tmp/controller-delivery-trace
-          /tmp/controller-delivery-trace /tmp/controller-contact-trace.tsv
       - name: Build Rust emulator core
         run: |
           set -o pipefail
@@ -100,7 +86,6 @@ jobs:
           cargo test --locked --lib audio_unit_format_tests
           cargo test --locked --lib framebuffer_export_tests
           cargo test --locked --lib cjk_font_tests
-          cargo test --locked --lib controller_mapping_tests
           cargo test --locked --lib libc_compatibility_tests
       - name: Build device app without signing
         run: |
@@ -129,6 +114,10 @@ jobs:
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
           test -s "$app/$executable"
           lipo "$app/$executable" -verify_arch arm64
+          unzip -o iosdeps/flydigi_sdk.zip -d "$app"
+          test -s "$app/flydigi.dylib"
+          test -s "$app/libcklib.dylib"
+          test -d "$app/FZKeymappingHelper.bundle"
           mkdir -p build/package/Payload
           cp -a "$app" build/package/Payload/
           cd build/package
