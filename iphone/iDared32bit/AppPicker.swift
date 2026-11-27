@@ -98,7 +98,6 @@ public func idaredSwiftUIAppPicker(
     _ icons: UnsafePointer<UnsafePointer<UInt8>?>,
     _ iconCount: Int
 ) -> UnsafeMutablePointer<CChar>? {
-    idaredControllerMapperStop();
     let data = Data(bytes: json, count: strlen(json))
     guard let input = try? JSONDecoder().decode(PickerInput.self, from: data)
     else {
