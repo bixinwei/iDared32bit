@@ -2235,6 +2235,10 @@ impl Window {
 /// show. A messagebox can't be used there before the game has a window: it's
 /// never shown, and the app hangs.
 pub static START_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// The most recent panic's full message ("Panic at <location>: <payload>"),
+/// set by the panic hook in `lib.rs`. Preferred over the bare payload so the
+/// crash dialog shows which source file and line panicked.
+pub static LAST_PANIC: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Set when the user picks "Return to App Picker" in the error messagebox.
 pub static RETURN_TO_APP_PICKER_AFTER_ERROR: std::sync::atomic::AtomicBool =
@@ -2245,7 +2249,12 @@ pub static RETURN_TO_APP_PICKER_AFTER_ERROR: std::sync::atomic::AtomicBool =
 /// The window argument allows for passing in the parent window for the
 /// messagebox, which is not required but should be done if possible.
 pub fn show_error_messagebox(window: Option<&Window>, error_message: &str) {
-    let error_message = &crate::log::public_names(error_message.to_string());
+    let error_message = LAST_PANIC
+        .lock()
+        .unwrap()
+        .take()
+        .unwrap_or_else(|| error_message.to_string());
+    let error_message = &crate::log::public_names(error_message);
     // Its crash is most likely just a result of that, so say so instead.
     let gles2_refused = &crate::frameworks::opengles::GLES2_REFUSED;
     let error_message = if gles2_refused.swap(false, std::sync::atomic::Ordering::Relaxed) {

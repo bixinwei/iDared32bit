@@ -7,6 +7,9 @@
 // foreground, so the CPU, audio and timer keep quiet in the background.
 import UIKit
 
+@_silgen_name("idared_start_flydigi_window_keeper")
+private func idaredStartFlyDigiWindowKeeper()
+
 private enum HostActivity {
     nonisolated(unsafe) static var observers: [NSObjectProtocol] = []
     nonisolated(unsafe) static var inactive = false
@@ -23,6 +26,7 @@ public func idaredInstallHostActivity() {
         },
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             HostActivity.inactive = false
+            idaredStartFlyDigiWindowKeeper()
         },
         center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { _ in
             HostActivity.terminating = true

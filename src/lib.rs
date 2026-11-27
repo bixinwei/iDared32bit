@@ -84,6 +84,7 @@ fn install_panic_hook() {
         } else {
             format!("Panic: {payload}")
         };
+        *crate::window::LAST_PANIC.lock().unwrap() = Some(message.clone());
         #[cfg(any(target_os = "android", target_os = "ios"))]
         echo!("{}", message);
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
