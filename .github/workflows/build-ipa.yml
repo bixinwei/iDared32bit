@@ -114,10 +114,6 @@ jobs:
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
           test -s "$app/$executable"
           lipo "$app/$executable" -verify_arch arm64
-          unzip -o iosdeps/flydigi_sdk.zip -d "$app"
-          test -s "$app/flydigi.dylib"
-          test -s "$app/libcklib.dylib"
-          test -d "$app/FZKeymappingHelper.bundle"
           mkdir -p build/package/Payload
           cp -a "$app" build/package/Payload/
           cd build/package

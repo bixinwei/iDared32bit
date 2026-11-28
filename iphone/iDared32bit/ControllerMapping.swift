@@ -8,9 +8,6 @@
 import GameController
 import UIKit
 
-@_silgen_name("idared_start_flydigi_window_keeper")
-private func idaredStartFlyDigiWindowKeeper()
-
 private struct ScreenBinding: Codable {
     var control: Int
     var x: Float
@@ -79,7 +76,6 @@ public func idaredInstallHostActivity() {
         },
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             HostActivity.inactive = false
-            idaredStartFlyDigiWindowKeeper()
         },
         center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { _ in
             HostActivity.terminating = true

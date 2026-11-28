@@ -42,12 +42,10 @@ extern void idared_install_host_activity(void);
 extern int32_t idared_host_activity_state(void);
 extern void idared_host_activity_wait(void);
 extern void idared_set_host_activity(int32_t (*)(void), void (*)(void));
-extern void idared_load_flydigi(void);
 
 int
 main(int argc, char *argv[])
 {
-    idared_load_flydigi();
     idared_set_swiftui_app_picker(idared_swiftui_app_picker);
     idared_install_open_in_hook();
     idared_set_movie_player(idared_movie_play, idared_movie_finished,
